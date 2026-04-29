@@ -1,0 +1,137 @@
+---
+- name: Install cert-manager
+  hosts: k8s_control_plane
+  become: true
+  gather_facts: false
+
+  vars:
+    kubeconfig_path: /etc/kubernetes/admin.conf
+
+    cert_manager_version: v1.20.2
+    cert_manager_namespace: cert-manager
+    cert_manager_release_name: cert-manager
+    cert_manager_chart_ref: oci://quay.io/jetstack/charts/cert-manager
+
+    cert_manager_crds:
+      - certificates.cert-manager.io
+      - certificaterequests.cert-manager.io
+      - issuers.cert-manager.io
+      - clusterissuers.cert-manager.io
+      - challenges.acme.cert-manager.io
+      - orders.acme.cert-manager.io
+
+    cert_manager_deployments:
+      - cert-manager
+      - cert-manager-cainjector
+      - cert-manager-webhook
+
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+    NO_COLOR: "1"
+
+  tasks:
+    - name: Create cert-manager namespace
+      ansible.builtin.command: >
+        kubectl create namespace {{ cert_manager_namespace }}
+      register: cert_manager_namespace_create
+      changed_when: "'created' in cert_manager_namespace_create.stdout"
+      failed_when:
+        - cert_manager_namespace_create.rc != 0
+        - "'AlreadyExists' not in cert_manager_namespace_create.stderr"
+
+    # NOTE:
+    # helm upgrade --install may report "upgraded" even when rendered manifests are unchanged.
+    # This is acceptable for now because Helm is the desired release manager for cert-manager.
+    # For stricter idempotency later, replace this command with kubernetes.core.helm or helm diff logic.
+    - name: Install or upgrade cert-manager with Helm
+      ansible.builtin.command: >
+        helm upgrade --install {{ cert_manager_release_name }}
+        {{ cert_manager_chart_ref }}
+        --namespace {{ cert_manager_namespace }}
+        --version {{ cert_manager_version }}
+        --set crds.enabled=true
+        --wait
+        --wait-for-jobs
+        --timeout 5m
+      register: cert_manager_helm_install
+      changed_when: >
+        'has been upgraded' in cert_manager_helm_install.stdout or
+        'has been installed' in cert_manager_helm_install.stdout
+
+    - name: Wait for cert-manager CRDs to be established
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Established
+        crd/{{ item }}
+        --timeout=120s
+      loop: "{{ cert_manager_crds }}"
+      register: cert_manager_crds_established
+      changed_when: false
+
+    - name: Wait for cert-manager deployments
+      ansible.builtin.command: >
+        kubectl -n {{ cert_manager_namespace }}
+        rollout status deployment/{{ item }} --timeout=300s
+      loop: "{{ cert_manager_deployments }}"
+      register: cert_manager_rollouts
+      changed_when: false
+
+    - name: Check whether cert-manager startup API check job exists
+      ansible.builtin.command: >
+        kubectl -n {{ cert_manager_namespace }}
+        get job cert-manager-startupapicheck --ignore-not-found
+      register: cert_manager_startupapicheck_job
+      changed_when: false
+
+    - name: Wait for cert-manager startup API check
+      ansible.builtin.command: >
+        kubectl -n {{ cert_manager_namespace }}
+        wait --for=condition=Complete job/cert-manager-startupapicheck --timeout=300s
+      register: cert_manager_startupapicheck
+      changed_when: false
+      when: cert_manager_startupapicheck_job.stdout | length > 0
+
+    - name: Show Helm release
+      ansible.builtin.command: >
+        helm status {{ cert_manager_release_name }} -n {{ cert_manager_namespace }}
+      register: cert_manager_helm_status
+      changed_when: false
+
+    - name: Show cert-manager pods
+      ansible.builtin.command: >
+        kubectl -n {{ cert_manager_namespace }} get pods -o wide
+      register: cert_manager_pods
+      changed_when: false
+
+    - name: Show cert-manager deployments
+      ansible.builtin.command: >
+        kubectl -n {{ cert_manager_namespace }} get deployments -o wide
+      register: cert_manager_deployments_status
+      changed_when: false
+
+    - name: Show cert-manager CRDs
+      ansible.builtin.command: >
+        kubectl get crd {{ cert_manager_crds | join(' ') }}
+      register: cert_manager_crds_status
+      changed_when: false
+
+    - name: Show cert-manager API resources
+      ansible.builtin.command: >
+        kubectl api-resources --api-group=cert-manager.io
+      register: cert_manager_api_resources
+      changed_when: false
+
+    - name: Show cert-manager ACME API resources
+      ansible.builtin.command: >
+        kubectl api-resources --api-group=acme.cert-manager.io
+      register: cert_manager_acme_api_resources
+      changed_when: false
+
+    - name: Print cert-manager status
+      ansible.builtin.debug:
+        msg:
+          - "{{ cert_manager_helm_status.stdout_lines }}"
+          - "{{ cert_manager_pods.stdout_lines }}"
+          - "{{ cert_manager_deployments_status.stdout_lines }}"
+          - "{{ cert_manager_crds_status.stdout_lines }}"
+          - "{{ cert_manager_api_resources.stdout_lines }}"
+          - "{{ cert_manager_acme_api_resources.stdout_lines }}"
