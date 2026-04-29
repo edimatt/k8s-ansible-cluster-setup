@@ -1,11 +1,18 @@
 CKA / platform base
+00-preflight.yml
+01-os-prep.yml
+02-containerd.yml
+03-kubernetes-packages.yml
+04-kubeadm-init.yml
+05-helm.yml
+06-cilium-cli.yml
+07-cilium-platform.yml
+08-single-node.yml
+09-validation.yml
 10-metrics-server.yml
-11-hubble.yml
-12-cilium-loadbalancer.yml
-13-gateway-api.yml
-14-cert-manager.yml
-15-monitoring.yml
-16-local-storage.yml
+11-cert-manager.yml
+12-monitoring.yml
+13-local-storage.yml
 
 CKS / security layer
 20-pod-security-admission.yml

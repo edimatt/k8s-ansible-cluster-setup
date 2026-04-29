@@ -1,0 +1,521 @@
+---
+- name: Install and configure Cilium platform networking
+  hosts: k8s_control_plane
+  become: true
+  gather_facts: true
+
+  vars:
+    kubeconfig_path: /etc/kubernetes/admin.conf
+    node_name: k8s-control-01
+
+    # Gateway API
+    gateway_api_version: v1.4.1
+    gateway_api_standard_bundle_url: "https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ gateway_api_version }}/standard-install.yaml"
+    cilium_gateway_class_name: cilium
+
+    # Cilium core
+    cilium_k8s_service_host: "{{ ansible_default_ipv4.address }}"
+    cilium_k8s_service_port: "6443"
+    cilium_k8s_client_qps: 10
+    cilium_k8s_client_burst: 20
+    cilium_operator_replicas: 1
+
+    # LoadBalancer / L2 announcements
+    cilium_lb_pool_name: lan-pool
+    cilium_lb_allow_first_last_ips: "No"
+    cilium_lb_pool_blocks: []
+
+    cilium_l2_policy_name: lan-l2-announcement
+    cilium_l2_interface_regex: "^enp0s1$"
+    cilium_l2_announce_external_ips: false
+    cilium_l2_announce_loadbalancer_ips: true
+
+    # Hubble CLI
+    hubble_cli_install_dir: /usr/local/bin
+    hubble_cli_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+    NO_COLOR: "1"
+
+  tasks:
+    - name: Require a LoadBalancer IP pool
+      ansible.builtin.assert:
+        that:
+          - cilium_lb_pool_blocks | length > 0
+        fail_msg: >-
+          Define cilium_lb_pool_blocks before running this playbook, for example:
+          -e '{"cilium_lb_pool_blocks":[{"start":"192.168.1.80","stop":"192.168.1.89"}]}'
+
+    - name: Show node interfaces
+      ansible.builtin.command: ip -br link
+      register: node_interfaces
+      changed_when: false
+
+    - name: Print node interfaces
+      ansible.builtin.debug:
+        var: node_interfaces.stdout_lines
+
+    # Gateway API CRDs must exist before enabling Cilium Gateway API support.
+    - name: Install Gateway API standard CRDs
+      ansible.builtin.command: >
+        kubectl apply -f {{ gateway_api_standard_bundle_url }}
+      register: gateway_api_crds_apply
+      changed_when: >
+        'created' in gateway_api_crds_apply.stdout or
+        'configured' in gateway_api_crds_apply.stdout
+
+    - name: Wait for GatewayClass CRD to be established
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Established
+        crd/gatewayclasses.gateway.networking.k8s.io
+        --timeout=120s
+      changed_when: false
+
+    - name: Wait for Gateway CRD to be established
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Established
+        crd/gateways.gateway.networking.k8s.io
+        --timeout=120s
+      changed_when: false
+
+    - name: Wait for HTTPRoute CRD to be established
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Established
+        crd/httproutes.gateway.networking.k8s.io
+        --timeout=120s
+      changed_when: false
+
+    - name: Wait for ReferenceGrant CRD to be established
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Established
+        crd/referencegrants.gateway.networking.k8s.io
+        --timeout=120s
+      changed_when: false
+
+    - name: Wait for GRPCRoute CRD to be established
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Established
+        crd/grpcroutes.gateway.networking.k8s.io
+        --timeout=120s
+      changed_when: false
+
+    # Detect current Cilium state.
+    - name: Check whether Cilium is already installed
+      ansible.builtin.command: >
+        cilium status --wait=false --kubeconfig {{ kubeconfig_path }}
+      register: cilium_status_before
+      changed_when: false
+      failed_when: false
+
+    - name: Read Cilium config if installed
+      ansible.builtin.command: >
+        cilium config view --kubeconfig {{ kubeconfig_path }}
+      register: cilium_config_before
+      changed_when: false
+      failed_when: false
+      when: cilium_status_before.rc == 0
+
+    - name: Check whether Cilium service account can create leases
+      ansible.builtin.command: >
+        kubectl auth can-i create leases.coordination.k8s.io
+        --as=system:serviceaccount:kube-system:cilium
+        -n kube-system
+      register: cilium_can_create_leases_before
+      changed_when: false
+      failed_when: false
+      when: cilium_status_before.rc == 0
+
+    - name: Check whether Cilium GatewayClass exists
+      ansible.builtin.command: >
+        kubectl get gatewayclass.gateway.networking.k8s.io {{ cilium_gateway_class_name }}
+      register: cilium_gatewayclass_before
+      changed_when: false
+      failed_when: false
+      when: cilium_status_before.rc == 0
+
+    - name: Detect required Cilium feature state
+      ansible.builtin.set_fact:
+        cilium_installed: "{{ cilium_status_before.rc == 0 }}"
+        cilium_l2_enabled: >-
+          {{
+            cilium_status_before.rc == 0 and
+            (
+              cilium_config_before.stdout_lines | default([])
+              | select('match', '^enable-l2-announcements\\s+true$')
+              | list
+              | length > 0
+            )
+          }}
+        cilium_gateway_api_enabled: >-
+          {{
+            cilium_status_before.rc == 0 and
+            (
+              cilium_config_before.stdout_lines | default([])
+              | select('match', '^enable-gateway-api\\s+true$')
+              | list
+              | length > 0
+            )
+          }}
+        cilium_has_lease_rbac: >-
+          {{
+            cilium_status_before.rc == 0 and
+            cilium_can_create_leases_before.stdout | default('') == "yes"
+          }}
+        cilium_has_gatewayclass: >-
+          {{
+            cilium_status_before.rc == 0 and
+            cilium_gatewayclass_before.rc | default(1) == 0
+          }}
+
+    - name: Decide whether Cilium upgrade is required
+      ansible.builtin.set_fact:
+        cilium_needs_upgrade: >-
+          {{
+            cilium_installed and
+            (
+              not cilium_l2_enabled or
+              not cilium_gateway_api_enabled or
+              not cilium_has_lease_rbac or
+              not cilium_has_gatewayclass
+            )
+          }}
+
+    # Install Cilium with all structural features enabled from the start.
+    - name: Install Cilium with platform networking features
+      ansible.builtin.command: >
+        cilium install
+        --kubeconfig {{ kubeconfig_path }}
+        --set kubeProxyReplacement=true
+        --set k8sServiceHost={{ cilium_k8s_service_host }}
+        --set k8sServicePort={{ cilium_k8s_service_port }}
+        --set operator.replicas={{ cilium_operator_replicas }}
+        --set l2announcements.enabled=true
+        --set gatewayAPI.enabled=true
+        --set k8sClientRateLimit.qps={{ cilium_k8s_client_qps }}
+        --set k8sClientRateLimit.burst={{ cilium_k8s_client_burst }}
+      when: not cilium_installed
+      register: cilium_install
+      changed_when: true
+
+    - name: Upgrade Cilium to ensure platform networking features are enabled
+      ansible.builtin.command: >
+        cilium upgrade
+        --kubeconfig {{ kubeconfig_path }}
+        --reuse-values
+        --set kubeProxyReplacement=true
+        --set k8sServiceHost={{ cilium_k8s_service_host }}
+        --set k8sServicePort={{ cilium_k8s_service_port }}
+        --set operator.replicas={{ cilium_operator_replicas }}
+        --set l2announcements.enabled=true
+        --set gatewayAPI.enabled=true
+        --set k8sClientRateLimit.qps={{ cilium_k8s_client_qps }}
+        --set k8sClientRateLimit.burst={{ cilium_k8s_client_burst }}
+      when: cilium_needs_upgrade
+      register: cilium_upgrade
+      changed_when: true
+
+    - name: Restart Cilium operator after Cilium install or upgrade
+      ansible.builtin.command: kubectl -n kube-system rollout restart deployment/cilium-operator
+      when:
+        - cilium_install is changed or cilium_upgrade is changed
+      register: cilium_operator_restart
+      changed_when: "'restarted' in cilium_operator_restart.stdout"
+
+    - name: Restart Cilium DaemonSet after Cilium install or upgrade
+      ansible.builtin.command: kubectl -n kube-system rollout restart ds/cilium
+      when:
+        - cilium_install is changed or cilium_upgrade is changed
+      register: cilium_agent_restart
+      changed_when: "'restarted' in cilium_agent_restart.stdout"
+
+    - name: Wait for Cilium operator rollout
+      ansible.builtin.command: >
+        kubectl -n kube-system rollout status deployment/cilium-operator --timeout=300s
+      changed_when: false
+
+    - name: Wait for Cilium DaemonSet rollout
+      ansible.builtin.command: >
+        kubectl -n kube-system rollout status ds/cilium --timeout=300s
+      changed_when: false
+
+    - name: Wait for Cilium status
+      ansible.builtin.command: >
+        cilium status --wait --kubeconfig {{ kubeconfig_path }}
+      register: cilium_status
+      changed_when: false
+
+    - name: Wait for node to become Ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready node/{{ node_name }} --timeout=300s
+      register: node_ready
+      changed_when: false
+
+    - name: Wait for CoreDNS rollout
+      ansible.builtin.command: >
+        kubectl -n kube-system rollout status deployment/coredns --timeout=300s
+      register: coredns_rollout
+      changed_when: false
+
+    # Validate required RBAC for L2 announcements.
+    - name: Verify Cilium service account can create leases
+      ansible.builtin.command: >
+        kubectl auth can-i create leases.coordination.k8s.io
+        --as=system:serviceaccount:kube-system:cilium
+        -n kube-system
+      register: cilium_can_create_leases
+      changed_when: false
+
+    - name: Verify Cilium service account can update leases
+      ansible.builtin.command: >
+        kubectl auth can-i update leases.coordination.k8s.io
+        --as=system:serviceaccount:kube-system:cilium
+        -n kube-system
+      register: cilium_can_update_leases
+      changed_when: false
+
+    - name: Verify Cilium service account can get leases
+      ansible.builtin.command: >
+        kubectl auth can-i get leases.coordination.k8s.io
+        --as=system:serviceaccount:kube-system:cilium
+        -n kube-system
+      register: cilium_can_get_leases
+      changed_when: false
+
+    - name: Assert Cilium has Lease RBAC for L2 announcements
+      ansible.builtin.assert:
+        that:
+          - cilium_can_create_leases.stdout == "yes"
+          - cilium_can_update_leases.stdout == "yes"
+          - cilium_can_get_leases.stdout == "yes"
+        fail_msg: >-
+          Cilium L2 announcements require Lease RBAC.
+          create={{ cilium_can_create_leases.stdout }},
+          update={{ cilium_can_update_leases.stdout }},
+          get={{ cilium_can_get_leases.stdout }}
+
+    # Hubble Relay + Hubble CLI.
+    - name: Check whether Hubble Relay deployment exists
+      ansible.builtin.command: >
+        kubectl -n kube-system get deployment hubble-relay
+      register: hubble_relay_deployment
+      changed_when: false
+      failed_when: false
+
+    - name: Enable Hubble Relay
+      ansible.builtin.command: >
+        cilium hubble enable --kubeconfig {{ kubeconfig_path }}
+      when: hubble_relay_deployment.rc != 0
+      register: hubble_enable
+      changed_when: true
+
+    - name: Wait for Cilium status after enabling Hubble
+      ansible.builtin.command: >
+        cilium status --wait --kubeconfig {{ kubeconfig_path }}
+      register: cilium_status_after_hubble
+      changed_when: false
+
+    - name: Wait for Hubble Relay rollout
+      ansible.builtin.command: >
+        kubectl -n kube-system rollout status deployment/hubble-relay --timeout=300s
+      register: hubble_relay_rollout
+      changed_when: false
+
+    - name: Get latest stable Hubble CLI version
+      ansible.builtin.uri:
+        url: https://raw.githubusercontent.com/cilium/hubble/master/stable.txt
+        return_content: true
+      register: hubble_cli_version_response
+
+    - name: Set Hubble CLI version
+      ansible.builtin.set_fact:
+        hubble_cli_version: "{{ hubble_cli_version_response.content | trim }}"
+
+    - name: Download Hubble CLI archive
+      ansible.builtin.get_url:
+        url: "https://github.com/cilium/hubble/releases/download/{{ hubble_cli_version }}/hubble-linux-{{ hubble_cli_arch }}.tar.gz"
+        dest: "/tmp/hubble-linux-{{ hubble_cli_arch }}.tar.gz"
+        mode: '0644'
+
+    - name: Extract Hubble CLI
+      ansible.builtin.unarchive:
+        src: "/tmp/hubble-linux-{{ hubble_cli_arch }}.tar.gz"
+        dest: "{{ hubble_cli_install_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+        creates: "{{ hubble_cli_install_dir }}/hubble"
+
+    - name: Check Hubble CLI version
+      ansible.builtin.command: hubble version
+      register: hubble_cli_check
+      changed_when: false
+
+    # Cilium LoadBalancer IPAM + L2 announcement resources.
+    - name: Define Cilium LoadBalancer IP pool manifest
+      ansible.builtin.set_fact:
+        cilium_lb_pool_manifest:
+          apiVersion: cilium.io/v2
+          kind: CiliumLoadBalancerIPPool
+          metadata:
+            name: "{{ cilium_lb_pool_name }}"
+          spec:
+            allowFirstLastIPs: "{{ cilium_lb_allow_first_last_ips }}"
+            blocks: "{{ cilium_lb_pool_blocks }}"
+
+    - name: Write Cilium LoadBalancer IP pool manifest
+      ansible.builtin.copy:
+        dest: /tmp/cilium-loadbalancer-ip-pool.yml
+        owner: root
+        group: root
+        mode: '0644'
+        content: "{{ cilium_lb_pool_manifest | to_nice_yaml }}"
+
+    - name: Write Cilium L2 announcement policy manifest
+      ansible.builtin.copy:
+        dest: /tmp/cilium-l2-announcement-policy.yml
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          apiVersion: cilium.io/v2alpha1
+          kind: CiliumL2AnnouncementPolicy
+          metadata:
+            name: {{ cilium_l2_policy_name }}
+          spec:
+            serviceSelector: {}
+            nodeSelector: {}
+            interfaces:
+              - "{{ cilium_l2_interface_regex }}"
+            externalIPs: {{ cilium_l2_announce_external_ips | bool | lower }}
+            loadBalancerIPs: {{ cilium_l2_announce_loadbalancer_ips | bool | lower }}
+
+    - name: Apply Cilium LoadBalancer IP pool
+      ansible.builtin.command: >
+        kubectl apply -f /tmp/cilium-loadbalancer-ip-pool.yml
+      register: cilium_lb_pool_apply
+      changed_when: "'created' in cilium_lb_pool_apply.stdout or 'configured' in cilium_lb_pool_apply.stdout"
+
+    - name: Apply Cilium L2 announcement policy
+      ansible.builtin.command: >
+        kubectl apply -f /tmp/cilium-l2-announcement-policy.yml
+      register: cilium_l2_policy_apply
+      changed_when: "'created' in cilium_l2_policy_apply.stdout or 'configured' in cilium_l2_policy_apply.stdout"
+
+    # Gateway API validation.
+    - name: Wait for Cilium GatewayClass
+      ansible.builtin.command: >
+        kubectl get gatewayclass.gateway.networking.k8s.io {{ cilium_gateway_class_name }}
+      register: cilium_gatewayclass
+      changed_when: false
+      retries: 12
+      delay: 10
+      until: cilium_gatewayclass.rc == 0
+
+    - name: Show Cilium GatewayClass describe before Accepted wait
+      ansible.builtin.command: kubectl describe gatewayclass {{ cilium_gateway_class_name }}
+      register: cilium_gatewayclass_describe_before_wait
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for Cilium GatewayClass to become Accepted
+      ansible.builtin.command: >
+        kubectl get gatewayclass.gateway.networking.k8s.io {{ cilium_gateway_class_name }}
+        -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}'
+      register: cilium_gatewayclass_accepted
+      changed_when: false
+      retries: 18
+      delay: 10
+      until: cilium_gatewayclass_accepted.stdout == "True"
+
+    # Final status.
+    - name: Show nodes
+      ansible.builtin.command: kubectl get nodes -o wide
+      register: nodes
+      changed_when: false
+
+    - name: Show pods
+      ansible.builtin.command: kubectl get pods -A -o wide
+      register: pods
+      changed_when: false
+
+    - name: Show Cilium LoadBalancer IP pools
+      ansible.builtin.command: kubectl get ciliumloadbalancerippools.cilium.io -o wide
+      register: cilium_lb_pools
+      changed_when: false
+
+    - name: Show Cilium L2 announcement policies
+      ansible.builtin.command: kubectl get ciliuml2announcementpolicies.cilium.io -o wide
+      register: cilium_l2_policies
+      changed_when: false
+
+    - name: Show Cilium L2 leases
+      ansible.builtin.command: kubectl get leases -A
+      register: cluster_leases
+      changed_when: false
+
+    - name: Show Gateway API CRDs
+      ansible.builtin.command: >
+        kubectl get crd
+        gatewayclasses.gateway.networking.k8s.io
+        gateways.gateway.networking.k8s.io
+        httproutes.gateway.networking.k8s.io
+        referencegrants.gateway.networking.k8s.io
+        grpcroutes.gateway.networking.k8s.io
+      register: gateway_api_crds
+      changed_when: false
+
+    - name: Show GatewayClass resources
+      ansible.builtin.command: kubectl get gatewayclass -o wide
+      register: gateway_classes
+      changed_when: false
+
+    - name: Show Gateway resources
+      ansible.builtin.command: kubectl get gateways.gateway.networking.k8s.io -A -o wide
+      register: gateway_resources
+      changed_when: false
+
+    - name: Show HTTPRoute resources
+      ansible.builtin.command: kubectl get httproutes.gateway.networking.k8s.io -A -o wide
+      register: httproute_resources
+      changed_when: false
+
+    - name: Show Hubble Relay pods
+      ansible.builtin.command: >
+        kubectl -n kube-system get pods
+        -l k8s-app=hubble-relay
+        -o wide
+      register: hubble_relay_pods
+      changed_when: false
+
+    - name: Show Hubble Relay service
+      ansible.builtin.command: >
+        kubectl -n kube-system get svc
+        -l k8s-app=hubble-relay
+        -o wide
+      register: hubble_relay_service
+      changed_when: false
+
+    - name: Show Cilium status
+      ansible.builtin.command: >
+        cilium status --wait=false --kubeconfig {{ kubeconfig_path }}
+      register: cilium_status_final
+      changed_when: false
+
+    - name: Print Cilium platform networking status
+      ansible.builtin.debug:
+        msg:
+          - "{{ nodes.stdout_lines }}"
+          - "{{ pods.stdout_lines }}"
+          - "{{ cilium_lb_pools.stdout_lines }}"
+          - "{{ cilium_l2_policies.stdout_lines }}"
+          - "{{ cluster_leases.stdout_lines }}"
+          - "{{ gateway_api_crds.stdout_lines }}"
+          - "{{ gateway_classes.stdout_lines }}"
+          - "{{ gateway_resources.stdout_lines }}"
+          - "{{ httproute_resources.stdout_lines }}"
+          - "{{ hubble_cli_check.stdout_lines }}"
+          - "{{ hubble_relay_pods.stdout_lines }}"
+          - "{{ hubble_relay_service.stdout_lines }}"
+          - "{{ cilium_status_final.stdout_lines }}"
