@@ -59,10 +59,36 @@
         - kubeadm
         - kubectl
 
-    - name: Enable kubelet
+    - name: Ensure containerd is enabled and running
+      ansible.builtin.systemd:
+        name: containerd
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Ensure kubelet is enabled
       ansible.builtin.systemd:
         name: kubelet
         enabled: true
+        daemon_reload: true
+
+    - name: Start kubelet best effort before kubeadm init
+      ansible.builtin.systemd:
+        name: kubelet
+        state: started
+        daemon_reload: true
+      register: kubelet_start
+      failed_when: false
+
+    - name: Check kubelet enabled state
+      ansible.builtin.command: systemctl is-enabled kubelet
+      register: kubelet_enabled
+      changed_when: false
+
+    - name: Check containerd active state
+      ansible.builtin.command: systemctl is-active containerd
+      register: containerd_active
+      changed_when: false
 
     - name: Show kubeadm version
       ansible.builtin.command: kubeadm version
@@ -74,8 +100,11 @@
       register: kubectl_version
       changed_when: false
 
-    - name: Show versions
+    - name: Show versions and service state
       ansible.builtin.debug:
         msg:
           - "{{ kubeadm_version.stdout }}"
           - "{{ kubectl_version.stdout }}"
+          - "kubelet enabled: {{ kubelet_enabled.stdout }}"
+          - "containerd active: {{ containerd_active.stdout }}"
+          - "kubelet start state: {{ kubelet_start.status.ActiveState | default('unknown') }}"
