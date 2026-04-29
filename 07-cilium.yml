@@ -1,0 +1,73 @@
+---
+- name: Install Cilium CNI with kube-proxy replacement
+  hosts: k8s_control_plane
+  become: true
+  gather_facts: true
+
+  vars:
+    kubeconfig_path: /etc/kubernetes/admin.conf
+    cilium_k8s_service_host: "{{ ansible_default_ipv4.address }}"
+    cilium_k8s_service_port: "6443"
+
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+
+  tasks:
+    - name: Check whether Cilium is already installed
+      ansible.builtin.command: cilium status --wait=false
+      register: cilium_status_before
+      changed_when: false
+      failed_when: false
+
+    - name: Install Cilium with kube-proxy replacement
+      ansible.builtin.command: >
+        cilium install
+        --set kubeProxyReplacement=true
+        --set k8sServiceHost={{ cilium_k8s_service_host }}
+        --set k8sServicePort={{ cilium_k8s_service_port }}
+        --set operator.replicas=1
+      when: cilium_status_before.rc != 0
+      register: cilium_install
+      changed_when: true
+
+    - name: Show Cilium install output
+      ansible.builtin.debug:
+        var: cilium_install.stdout_lines
+      when: cilium_install is defined and cilium_install.stdout_lines is defined
+
+    - name: Wait for Cilium status
+      ansible.builtin.command: cilium status --wait
+      register: cilium_status
+      changed_when: false
+
+    - name: Show Cilium status
+      ansible.builtin.debug:
+        var: cilium_status.stdout_lines
+
+    - name: Wait for node to become Ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready node/k8s-control-01 --timeout=300s
+      register: node_ready
+      changed_when: false
+
+    - name: Wait for CoreDNS rollout
+      ansible.builtin.command: >
+        kubectl -n kube-system rollout status deployment/coredns --timeout=300s
+      register: coredns_rollout
+      changed_when: false
+
+    - name: Show nodes
+      ansible.builtin.command: kubectl get nodes -o wide
+      register: nodes
+      changed_when: false
+
+    - name: Show pods
+      ansible.builtin.command: kubectl get pods -A -o wide
+      register: pods
+      changed_when: false
+
+    - name: Print cluster status
+      ansible.builtin.debug:
+        msg:
+          - "{{ nodes.stdout }}"
+          - "{{ pods.stdout }}"

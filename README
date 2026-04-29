@@ -1,0 +1,18 @@
+CKA / platform base
+10-metrics-server.yml
+11-hubble.yml
+12-cilium-loadbalancer.yml
+13-gateway-api.yml
+14-cert-manager.yml
+15-monitoring.yml
+16-local-storage.yml
+
+CKS / security layer
+20-pod-security-admission.yml
+21-kube-bench.yml
+22-trivy.yml
+23-kyverno.yml
+24-falco.yml
+25-audit-logging.yml
+26-etcd-encryption.yml
+27-seccomp-profiles.yml

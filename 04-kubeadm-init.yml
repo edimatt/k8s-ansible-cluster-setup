@@ -1,0 +1,115 @@
+---
+- name: Initialize Kubernetes control plane with kubeadm
+  hosts: k8s_control_plane
+  become: true
+  gather_facts: true
+
+  vars:
+    pod_network_cidr: "10.244.0.0/16"
+    kubeconfig_path: /etc/kubernetes/admin.conf
+    kube_user: edoardo
+
+  tasks:
+    - name: Check if Kubernetes control plane is already initialized
+      ansible.builtin.stat:
+        path: "{{ kubeconfig_path }}"
+      register: kubeadm_admin_conf
+
+    - name: Initialize Kubernetes control plane
+      ansible.builtin.command: >
+        kubeadm init
+        --pod-network-cidr={{ pod_network_cidr }}
+        --skip-phases=addon/kube-proxy
+        --apiserver-advertise-address={{ ansible_default_ipv4.address }}
+      when: not kubeadm_admin_conf.stat.exists
+      register: kubeadm_init
+      changed_when: true
+
+    - name: Show kubeadm init output
+      ansible.builtin.debug:
+        var: kubeadm_init.stdout_lines
+      when: kubeadm_init is defined and kubeadm_init.stdout_lines is defined
+
+    - name: Create .kube directory for user edoardo
+      ansible.builtin.file:
+        path: "/home/{{ kube_user }}/.kube"
+        state: directory
+        owner: "{{ kube_user }}"
+        group: "{{ kube_user }}"
+        mode: '0755'
+
+    - name: Copy admin kubeconfig for user edoardo
+      ansible.builtin.copy:
+        src: "{{ kubeconfig_path }}"
+        dest: "/home/{{ kube_user }}/.kube/config"
+        owner: "{{ kube_user }}"
+        group: "{{ kube_user }}"
+        mode: '0600'
+        remote_src: true
+
+    - name: Ensure .bashrc.d directory exists for user
+      ansible.builtin.file:
+        path: "/home/{{ kube_user }}/.bashrc.d"
+        state: directory
+        owner: "{{ kube_user }}"
+        group: "{{ kube_user }}"
+        mode: '0755'
+
+    - name: Install Kubernetes shell helpers for user
+      ansible.builtin.copy:
+        dest: "/home/{{ kube_user }}/.bashrc.d/kubernetes.sh"
+        owner: "{{ kube_user }}"
+        group: "{{ kube_user }}"
+        mode: '0644'
+        content: |
+          # Kubernetes / CKA shell helpers
+          export KUBECONFIG="${HOME}/.kube/config"
+
+          # Core kubectl aliases
+          alias k='kubectl'
+          alias kg='kubectl get'
+          alias kd='kubectl describe'
+          alias ka='kubectl apply -f'
+          alias kdel='kubectl delete'
+          alias kl='kubectl logs'
+          alias ke='kubectl exec -it'
+
+          # Common resources
+          alias kgp='kubectl get pods'
+          alias kgpw='kubectl get pods -o wide'
+          alias kgs='kubectl get svc'
+          alias kgd='kubectl get deploy'
+          alias kgn='kubectl get nodes'
+          alias kgnw='kubectl get nodes -o wide'
+          alias kgns='kubectl get ns'
+
+          # Context / namespace
+          alias kctx='kubectl config current-context'
+          alias kns='kubectl config set-context --current --namespace'
+
+          # Output helpers
+          alias kgy='kubectl get -o yaml'
+          alias kgj='kubectl get -o json'
+
+          # CKA speed helpers
+          export do='--dry-run=client -o yaml'
+          export now='--force --grace-period=0'
+
+          # Bash completion
+          source <(kubectl completion bash)
+          complete -o default -F __start_kubectl k
+
+    - name: Ensure .bashrc sources .bashrc.d scripts
+      ansible.builtin.blockinfile:
+        path: "/home/{{ kube_user }}/.bashrc"
+        owner: "{{ kube_user }}"
+        group: "{{ kube_user }}"
+        mode: '0644'
+        marker: "# {mark} ANSIBLE MANAGED BASHRC.D"
+        block: |
+          if [ -d "$HOME/.bashrc.d" ]; then
+            for f in "$HOME"/.bashrc.d/*.sh; do
+              [ -r "$f" ] && . "$f"
+            done
+            unset f
+          fi
