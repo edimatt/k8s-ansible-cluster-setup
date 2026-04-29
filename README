@@ -1,20 +1,44 @@
-CKA / platform base
-00-preflight.yml
-01-os-prep.yml
-02-containerd.yml
-03-kubernetes-packages.yml
-04-kubeadm-init.yml
-05-helm.yml
-06-cilium-cli.yml
-07-cilium-platform.yml
-08-single-node.yml
-09-validation.yml
-10-metrics-server.yml
+Kubernetes lab bootstrap
+
+Run the playbooks from this directory. The inventory is configured in
+ansible.cfg and points to inventory/hosts.ini.
+
+Full bootstrap order:
+
+ansible-playbook 00-preflight.yml
+ansible-playbook 01-os-prep.yml
+ansible-playbook 02-containerd.yml
+ansible-playbook 03-kubernetes-packages.yml
+ansible-playbook 04-kubeadm-init.yml
+ansible-playbook 05-helm.yml
+ansible-playbook 06-cilium-cli.yml
+ansible-playbook 07-cilium-platform.yml \
+  -e '{"cilium_lb_pool_blocks":[{"start":"192.168.1.80","stop":"192.168.1.89"}]}'
+ansible-playbook 08-single-node.yml
+ansible-playbook 09-validation.yml
+ansible-playbook 10-metrics-server.yml
+ansible-playbook 13-local-storage.yml
+
+Planned next platform playbooks:
+
 11-cert-manager.yml
 12-monitoring.yml
-13-local-storage.yml
 
-CKS / security layer
+Re-run a single playbook:
+
+ansible-playbook <playbook>.yml
+
+Re-run Cilium platform networking:
+
+ansible-playbook 07-cilium-platform.yml \
+  -e '{"cilium_lb_pool_blocks":[{"start":"192.168.1.80","stop":"192.168.1.89"}]}'
+
+Syntax check:
+
+ansible-playbook --syntax-check <playbook>.yml
+
+CKS / security layer roadmap:
+
 20-pod-security-admission.yml
 21-kube-bench.yml
 22-trivy.yml
