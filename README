@@ -21,10 +21,6 @@ ansible-playbook 11-cert-manager.yml
 ansible-playbook 12-monitoring.yml
 ansible-playbook 13-local-storage.yml
 
-Planned next platform playbooks:
-
-none
-
 Re-run a single playbook:
 
 ansible-playbook <playbook>.yml
