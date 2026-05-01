@@ -1,0 +1,94 @@
+---
+- name: Reset Kubernetes cluster state
+  hosts: k8s_cluster
+  become: true
+  gather_facts: false
+
+  vars:
+    kube_user: edoardo
+    crictl_socket: unix:///run/containerd/containerd.sock
+
+    reset_paths:
+      - /etc/kubernetes
+      - /var/lib/etcd
+      - /var/lib/kubelet
+      - /var/lib/cni
+      - /etc/cni/net.d
+      - /var/run/kubernetes
+      - /opt/local-path-provisioner
+      - /tmp/kube-prometheus-stack-values.yml
+      - /tmp/local-path-config.yml
+
+    containerd_state_paths:
+      - /var/lib/containerd
+      - /run/containerd
+
+    cilium_links:
+      - cilium_host
+      - cilium_net
+      - cilium_vxlan
+
+  tasks:
+    - name: Run kubeadm reset
+      ansible.builtin.command: >
+        kubeadm reset --force --cri-socket {{ crictl_socket }}
+      register: kubeadm_reset
+      changed_when: kubeadm_reset.rc == 0
+      failed_when: false
+
+    - name: Stop kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        state: stopped
+      failed_when: false
+
+    - name: Stop containerd before removing runtime state
+      ansible.builtin.systemd:
+        name: containerd
+        state: stopped
+      failed_when: false
+
+    - name: Remove Kubernetes and add-on state paths
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ reset_paths }}"
+
+    - name: Remove user kubeconfig
+      ansible.builtin.file:
+        path: "/home/{{ kube_user }}/.kube/config"
+        state: absent
+
+    - name: Remove containerd runtime state
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ containerd_state_paths }}"
+
+    - name: Remove leftover Cilium network interfaces
+      ansible.builtin.command: ip link delete {{ item }}
+      loop: "{{ cilium_links }}"
+      register: cilium_link_delete
+      changed_when: cilium_link_delete.rc == 0
+      failed_when: false
+
+    - name: Start containerd
+      ansible.builtin.systemd:
+        name: containerd
+        enabled: true
+        state: started
+        daemon_reload: true
+      failed_when: false
+
+    - name: Keep kubelet enabled for the next bootstrap
+      ansible.builtin.systemd:
+        name: kubelet
+        enabled: true
+        daemon_reload: true
+      failed_when: false
+
+    - name: Show reset summary
+      ansible.builtin.debug:
+        msg:
+          - "kubeadm reset rc: {{ kubeadm_reset.rc }}"
+          - "Removed Kubernetes state, CNI config, containerd runtime state, user kubeconfig, and local-path data."
