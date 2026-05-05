@@ -17,9 +17,9 @@ playbooks=(
   10-metrics-server.yml
   11-validation.yml
   12-cert-manager.yml
+  13-nginx-ingress-lab.yml
+  # 14-monitoring.yml
 )
-
-# 13-monitoring.yml
 
 default_cilium_lb_pool_blocks='[{"start":"192.168.1.80","stop":"192.168.1.89"}]'
 cilium_lb_pool_blocks="${CILIUM_LB_POOL_BLOCKS:-$default_cilium_lb_pool_blocks}"

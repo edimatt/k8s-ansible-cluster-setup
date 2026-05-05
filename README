@@ -36,7 +36,8 @@ ansible-playbook 09-local-storage.yml
 ansible-playbook 10-metrics-server.yml
 ansible-playbook 11-validation.yml
 ansible-playbook 12-cert-manager.yml
-ansible-playbook 13-monitoring.yml
+ansible-playbook 13-nginx-ingress-lab.yml
+# ansible-playbook 14-monitoring.yml
 
 Re-run a single playbook:
 

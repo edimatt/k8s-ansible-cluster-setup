@@ -16,6 +16,7 @@
       - /etc/cni/net.d
       - /var/run/kubernetes
       - /opt/local-path-provisioner
+      - /tmp/ingress-nginx-values.yml
       - /tmp/kube-prometheus-stack-values.yml
       - /tmp/local-path-config.yml
 
