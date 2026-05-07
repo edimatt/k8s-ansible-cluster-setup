@@ -7,9 +7,13 @@ Run the full bootstrap:
 
 ./bootstrap.sh
 
+If sudo on the target requires a password:
+
+./bootstrap.sh -K
+
 Resume from a specific playbook:
 
-./bootstrap.sh --from 08-cilium-platform.yml
+./bootstrap.sh --from 09-cilium-platform.yml
 
 Reset the cluster before a fresh bootstrap:
 
@@ -20,24 +24,38 @@ Non-interactive reset:
 
 ./reset-cluster.sh --yes
 
+Reset when sudo on the target requires a password:
+
+./reset-cluster.sh -K
+
 Full bootstrap order:
 
 ansible-playbook 00-preflight.yml
 ansible-playbook 01-os-prep.yml
-ansible-playbook 02-containerd.yml
-ansible-playbook 03-kubernetes-packages.yml
-ansible-playbook 04-kubeadm-init.yml
-ansible-playbook 05-single-node.yml
-ansible-playbook 06-helm.yml
-ansible-playbook 07-cilium-cli.yml
-ansible-playbook 08-cilium-platform.yml \
+ansible-playbook 02-firewall.yml
+ansible-playbook 03-containerd.yml
+ansible-playbook 04-kubernetes-packages.yml
+ansible-playbook 05-kubeadm-init.yml
+ansible-playbook 06-single-node.yml
+ansible-playbook 07-helm.yml
+ansible-playbook 08-cilium-cli.yml
+ansible-playbook 09-cilium-platform.yml \
   -e '{"cilium_lb_pool_blocks":[{"start":"192.168.1.80","stop":"192.168.1.89"}]}'
-ansible-playbook 09-local-storage.yml
-ansible-playbook 10-metrics-server.yml
-ansible-playbook 11-validation.yml
-ansible-playbook 12-cert-manager.yml
-ansible-playbook 13-nginx-ingress-lab.yml
-# ansible-playbook 14-monitoring.yml
+ansible-playbook 10-local-storage.yml
+ansible-playbook 11-metrics-server.yml
+ansible-playbook 12-validation.yml
+ansible-playbook 13-cert-manager.yml
+ansible-playbook 14-nginx-ingress-lab.yml
+# ansible-playbook 15-monitoring.yml
+
+Firewall:
+
+02-firewall.yml configures UFW for this Kubernetes lab. It allows SSH, common
+node ports, NodePort TCP/UDP, Cilium VXLAN, Cilium health/Hubble server,
+ingress/Gateway HTTP and HTTPS, and node-exporter. Control plane ports are only
+opened on k8s_control_plane hosts. Incoming traffic is denied by default;
+outgoing, routed traffic, and UFW packet forwarding are allowed for pod and
+service networking.
 
 Re-run a single playbook:
 
@@ -45,7 +63,7 @@ ansible-playbook <playbook>.yml
 
 Re-run Cilium platform networking:
 
-ansible-playbook 08-cilium-platform.yml \
+ansible-playbook 09-cilium-platform.yml \
   -e '{"cilium_lb_pool_blocks":[{"start":"192.168.1.80","stop":"192.168.1.89"}]}'
 
 Syntax check:

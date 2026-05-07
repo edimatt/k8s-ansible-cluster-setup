@@ -6,39 +6,44 @@ cd "$(dirname "$0")"
 playbooks=(
   00-preflight.yml
   01-os-prep.yml
-  02-containerd.yml
-  03-kubernetes-packages.yml
-  04-kubeadm-init.yml
-  05-single-node.yml
-  06-helm.yml
-  07-cilium-cli.yml
-  08-cilium-platform.yml
-  09-local-storage.yml
-  10-metrics-server.yml
-  11-validation.yml
-  12-cert-manager.yml
-  13-nginx-ingress-lab.yml
-  # 14-monitoring.yml
+  02-firewall.yml
+  03-containerd.yml
+  04-kubernetes-packages.yml
+  05-kubeadm-init.yml
+  06-single-node.yml
+  07-helm.yml
+  08-cilium-cli.yml
+  09-cilium-platform.yml
+  10-local-storage.yml
+  11-metrics-server.yml
+  12-validation.yml
+  13-cert-manager.yml
+  14-nginx-ingress-lab.yml
+  # 15-monitoring.yml
 )
 
 default_cilium_lb_pool_blocks='[{"start":"192.168.1.80","stop":"192.168.1.89"}]'
 cilium_lb_pool_blocks="${CILIUM_LB_POOL_BLOCKS:-$default_cilium_lb_pool_blocks}"
 from_playbook=""
+ask_become_pass=false
+syntax_check=false
 ansible_mode=()
 ansible_args=()
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 cilium_extra_vars_file="${tmpdir}/cilium-extra-vars.json"
+become_extra_vars_file="${tmpdir}/become-extra-vars.yml"
 
 printf '{"cilium_lb_pool_blocks":%s}\n' "$cilium_lb_pool_blocks" > "$cilium_extra_vars_file"
 
 usage() {
   printf '%s\n' \
-    "Usage: ./bootstrap.sh [--from PLAYBOOK] [--check] [--syntax-check] [-- ANSIBLE_ARGS...]" \
+    "Usage: ./bootstrap.sh [--from PLAYBOOK] [-K|--ask-become-pass] [--check] [--syntax-check] [-- ANSIBLE_ARGS...]" \
     "" \
     "Examples:" \
     "  ./bootstrap.sh" \
-    "  ./bootstrap.sh --from 08-cilium-platform.yml" \
+    "  ./bootstrap.sh -K" \
+    "  ./bootstrap.sh --from 09-cilium-platform.yml" \
     "  CILIUM_LB_POOL_BLOCKS='[{\"start\":\"192.168.1.80\",\"stop\":\"192.168.1.99\"}]' ./bootstrap.sh" \
     "  ./bootstrap.sh -- --limit k8s_control_plane"
 }
@@ -60,6 +65,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --syntax-check)
       ansible_mode+=(--syntax-check)
+      syntax_check=true
+      shift
+      ;;
+    -K|--ask-become-pass)
+      ask_become_pass=true
       shift
       ;;
     -h|--help)
@@ -78,6 +88,23 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$syntax_check" != true && "$ask_become_pass" == true ]]; then
+  if [[ -z "${ANSIBLE_BECOME_PASSWORD:-}" ]]; then
+    printf '%s' 'BECOME password: '
+    read -r -s become_password
+    printf '\n'
+  else
+    become_password="$ANSIBLE_BECOME_PASSWORD"
+  fi
+
+  {
+    printf 'ansible_become_password: |-\n'
+    printf '  %s\n' "$become_password"
+  } > "$become_extra_vars_file"
+  chmod 600 "$become_extra_vars_file"
+  unset become_password
+fi
 
 start_index=0
 if [[ -n "$from_playbook" ]]; then
@@ -104,7 +131,11 @@ for index in "${!playbooks[@]}"; do
   playbook="${playbooks[$index]}"
   cmd=(ansible-playbook "${ansible_mode[@]}" "$playbook")
 
-  if [[ "$playbook" == "08-cilium-platform.yml" ]]; then
+  if [[ -s "$become_extra_vars_file" ]]; then
+    cmd+=(-e "@${become_extra_vars_file}")
+  fi
+
+  if [[ "$playbook" == "09-cilium-platform.yml" ]]; then
     cmd+=(-e "@${cilium_extra_vars_file}")
   fi
 
