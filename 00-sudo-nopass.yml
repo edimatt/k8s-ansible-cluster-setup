@@ -1,0 +1,19 @@
+---
+- name: Configure passwordless sudo for Ansible user
+  hosts: k8s_cluster
+  gather_facts: true
+
+  vars:
+    sudo_nopass_user: "{{ ansible_user | default(ansible_ssh_user) | default(ansible_user_id) }}"
+
+  tasks:
+    - name: Configure passwordless sudo
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/{{ sudo_nopass_user }}"
+        owner: root
+        group: root
+        mode: '0440'
+        content: |
+          {{ sudo_nopass_user }} ALL=(ALL:ALL) NOPASSWD: ALL
+        validate: /usr/sbin/visudo -cf %s
+      become: true

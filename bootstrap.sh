@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 playbooks=(
+  00-sudo-nopass.yml
   00-preflight.yml
   01-os-prep.yml
   02-firewall.yml
