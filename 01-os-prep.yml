@@ -53,9 +53,12 @@
     - name: Install base packages
       ansible.builtin.apt:
         name:
+          - iputils-ping
           - apt-transport-https
           - ca-certificates
+          - cron
           - curl
+          - less
           - gpg
           - gnupg
           - lsb-release

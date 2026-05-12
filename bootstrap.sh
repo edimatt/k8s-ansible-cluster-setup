@@ -21,6 +21,7 @@ playbooks=(
   13-cert-manager.yml
   14-nginx-ingress-lab.yml
   # 15-monitoring.yml
+  # 16-pod-security-admission.yml
 )
 
 default_cilium_lb_pool_blocks='[{"start":"192.168.1.80","stop":"192.168.1.89"}]'

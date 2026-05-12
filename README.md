@@ -118,6 +118,7 @@ ansible-playbook 12-validation.yml
 ansible-playbook 13-cert-manager.yml
 ansible-playbook 14-nginx-ingress-lab.yml
 # ansible-playbook 15-monitoring.yml
+# ansible-playbook 16-pod-security-admission.yml
 ```
 
 ## Firewall
@@ -132,6 +133,22 @@ service networking.
 The control-plane-only firewall ports are `6443`, `2379-2380`, `10257`, and
 `10259`. Common node ports include `10250`, `80`, `443`, `4240`, `4244`,
 `8472/udp`, `9100`, and `30000-32767` TCP/UDP.
+
+## Pod Security Admission
+
+`16-pod-security-admission.yml` configures the built-in Kubernetes Pod Security
+Admission controller through the kube-apiserver static pod. Cluster defaults are
+kept permissive with `enforce=privileged`, while `audit` and `warn` use the
+`restricted` profile so violations are visible without breaking existing lab
+workloads.
+
+The playbook also creates three lab namespaces:
+
+```text
+cks-privileged  enforce=privileged, audit=restricted, warn=restricted
+cks-baseline    enforce=baseline, audit=restricted, warn=restricted
+cks-restricted  enforce=restricted, audit=restricted, warn=restricted
+```
 
 ## Common Commands
 
@@ -157,12 +174,12 @@ ansible-playbook --syntax-check <playbook>.yml
 ## CKS / Security Layer Roadmap
 
 ```text
-20-pod-security-admission.yml
-21-kube-bench.yml
-22-trivy.yml
-23-kyverno.yml
-24-falco.yml
-25-audit-logging.yml
-26-etcd-encryption.yml
-27-seccomp-profiles.yml
+16-pod-security-admission.yml
+17-kube-bench.yml
+18-trivy.yml
+19-kyverno.yml
+20-falco.yml
+21-audit-logging.yml
+22-etcd-encryption.yml
+23-seccomp-profiles.yml
 ```

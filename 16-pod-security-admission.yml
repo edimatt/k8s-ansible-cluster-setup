@@ -1,0 +1,193 @@
+---
+- name: Configure Pod Security Admission for home lab
+  hosts: k8s_control_plane
+  become: true
+  gather_facts: false
+
+  vars:
+    kubeconfig_path: /etc/kubernetes/admin.conf
+    psa_config_dir: /etc/kubernetes/admission-control
+    psa_config_path: "{{ psa_config_dir }}/pod-security-admission.yaml"
+    kube_apiserver_manifest_path: /etc/kubernetes/manifests/kube-apiserver.yaml
+    kube_apiserver_manifest_pre_psa_backup_path: "{{ kube_apiserver_manifest_path }}.pre-psa.manual"
+    psa_pod_security_config_api_version: pod-security.admission.config.k8s.io/v1
+
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+    NO_COLOR: "1"
+
+  tasks:
+    - name: Read kube-apiserver manifest
+      ansible.builtin.slurp:
+        path: "{{ kube_apiserver_manifest_path }}"
+      register: kube_apiserver_manifest_raw
+
+    - name: Set kube-apiserver manifest text
+      ansible.builtin.set_fact:
+        kube_apiserver_manifest_text: "{{ kube_apiserver_manifest_raw.content | b64decode }}"
+
+    - name: Set unmanaged kube-apiserver manifest text
+      ansible.builtin.set_fact:
+        kube_apiserver_unmanaged_manifest_text: >-
+          {{
+            kube_apiserver_manifest_text
+            | regex_replace('(?ms)^\\s*# BEGIN ANSIBLE MANAGED PSA API SERVER FLAG$.*?^\\s*# END ANSIBLE MANAGED PSA API SERVER FLAG$\\n?', '')
+            | regex_replace('(?ms)^\\s*# BEGIN ANSIBLE MANAGED PSA VOLUME MOUNT$.*?^\\s*# END ANSIBLE MANAGED PSA VOLUME MOUNT$\\n?', '')
+            | regex_replace('(?ms)^\\s*# BEGIN ANSIBLE MANAGED PSA VOLUME$.*?^\\s*# END ANSIBLE MANAGED PSA VOLUME$\\n?', '')
+          }}
+
+    - name: Assert PodSecurity admission plugin is not disabled
+      ansible.builtin.assert:
+        that:
+          - kube_apiserver_manifest_text is not regex_search("(?m)^\\s*-?\\s*['\"]?--disable-admission-plugins(?:=|\\s+)[^\\n#]*\\bPodSecurity\\b")
+        fail_msg: "kube-apiserver explicitly disables PodSecurity in --disable-admission-plugins"
+
+    - name: Verify kube-apiserver manifest has expected insertion points
+      ansible.builtin.assert:
+        that:
+          - kube_apiserver_manifest_text is regex_search('(?m)^    - kube-apiserver$')
+          - kube_apiserver_manifest_text is regex_search('(?m)^    volumeMounts:$')
+          - kube_apiserver_manifest_text is regex_search('(?m)^  volumes:$')
+        fail_msg: "kube-apiserver manifest does not match expected kubeadm static pod layout"
+
+    - name: Fail if admission control config is already managed manually
+      ansible.builtin.fail:
+        msg: "kube-apiserver already has --admission-control-config-file configured outside this playbook"
+      when:
+        - "'--admission-control-config-file=' in kube_apiserver_unmanaged_manifest_text"
+
+    - name: Fail if admission control volume mount is already managed manually
+      ansible.builtin.fail:
+        msg: "kube-apiserver already has an admission-control volumeMount configured outside this playbook"
+      when:
+        - kube_apiserver_unmanaged_manifest_text is regex_search('(?ms)^\\s{4}volumeMounts:\\s*$.*?^\\s{4,}-\\s+mountPath:\\s*[^\\n]+\\n(?:^\\s{6,}[^\\n]+\\n)*?^\\s{6,}name:\\s*admission-control\\s*$')
+
+    - name: Fail if admission control volume is already managed manually
+      ansible.builtin.fail:
+        msg: "kube-apiserver already has an admission-control volume configured outside this playbook"
+      when:
+        - kube_apiserver_unmanaged_manifest_text is regex_search('(?ms)^\\s{2}volumes:\\s*$.*?^\\s{4}-\\s+[^\\n]+\\n(?:^\\s{6,}[^\\n]+\\n)*?^\\s{6}name:\\s*admission-control\\s*$')
+
+    - name: Create admission control config directory
+      ansible.builtin.file:
+        path: "{{ psa_config_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Write Pod Security Admission configuration
+      ansible.builtin.copy:
+        dest: "{{ psa_config_path }}"
+        backup: true
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          apiVersion: apiserver.config.k8s.io/v1
+          kind: AdmissionConfiguration
+          plugins:
+            - name: PodSecurity
+              configuration:
+                apiVersion: {{ psa_pod_security_config_api_version }}
+                kind: PodSecurityConfiguration
+                defaults:
+                  enforce: privileged
+                  enforce-version: latest
+                  audit: restricted
+                  audit-version: latest
+                  warn: restricted
+                  warn-version: latest
+                exemptions:
+                  usernames: []
+                  runtimeClasses: []
+                  namespaces:
+                    - kube-system
+      register: psa_config_write
+
+    - name: Warn before modifying kube-apiserver static pod manifest
+      ansible.builtin.debug:
+        msg:
+          - "This playbook modifies the kube-apiserver static pod manifest."
+          - "Backups are created before managed edits: {{ kube_apiserver_manifest_pre_psa_backup_path }} and blockinfile timestamped backups."
+
+    - name: Create pre-change kube-apiserver manifest backup
+      ansible.builtin.copy:
+        src: "{{ kube_apiserver_manifest_path }}"
+        dest: "{{ kube_apiserver_manifest_pre_psa_backup_path }}"
+        remote_src: true
+        force: false
+        owner: root
+        group: root
+        mode: preserve
+
+    - name: Configure kube-apiserver admission config flag
+      ansible.builtin.blockinfile:
+        path: "{{ kube_apiserver_manifest_path }}"
+        backup: true
+        marker: "    # {mark} ANSIBLE MANAGED PSA API SERVER FLAG"
+        insertafter: '^    - kube-apiserver$'
+        block: |2
+              - --admission-control-config-file={{ psa_config_path }}
+      register: psa_apiserver_flag
+
+    - name: Mount admission config directory into kube-apiserver
+      ansible.builtin.blockinfile:
+        path: "{{ kube_apiserver_manifest_path }}"
+        backup: true
+        marker: "    # {mark} ANSIBLE MANAGED PSA VOLUME MOUNT"
+        insertafter: '^    volumeMounts:$'
+        block: |2
+              - mountPath: {{ psa_config_dir }}
+                name: admission-control
+                readOnly: true
+      register: psa_apiserver_volume_mount
+
+    - name: Add admission config host path volume to kube-apiserver
+      ansible.builtin.blockinfile:
+        path: "{{ kube_apiserver_manifest_path }}"
+        backup: true
+        marker: "  # {mark} ANSIBLE MANAGED PSA VOLUME"
+        insertafter: '^  volumes:$'
+        block: |2
+            - hostPath:
+                path: {{ psa_config_dir }}
+                type: DirectoryOrCreate
+              name: admission-control
+      register: psa_apiserver_volume
+
+    - name: Touch kube-apiserver manifest when only PSA config changed
+      ansible.builtin.file:
+        path: "{{ kube_apiserver_manifest_path }}"
+        state: touch
+        modification_time: now
+        access_time: preserve
+      register: psa_apiserver_manifest_touch
+      when:
+        - psa_config_write.changed
+        - not psa_apiserver_flag.changed
+        - not psa_apiserver_volume_mount.changed
+        - not psa_apiserver_volume.changed
+
+    - name: Give kubelet time to restart kube-apiserver static pod
+      ansible.builtin.pause:
+        seconds: 20
+      when: >
+        psa_apiserver_flag.changed or
+        psa_apiserver_volume_mount.changed or
+        psa_apiserver_volume.changed or
+        (psa_apiserver_manifest_touch.changed | default(false))
+
+    - name: Wait for kube-apiserver to become available after static pod update
+      ansible.builtin.command: kubectl get --raw=/readyz
+      register: kube_apiserver_readyz
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: kube_apiserver_readyz.rc == 0 and 'ok' in kube_apiserver_readyz.stdout
+
+    - name: Print Pod Security Admission status
+      ansible.builtin.debug:
+        msg:
+          - "Pod Security Admission config: {{ psa_config_path }}"
+          - "kube-apiserver readyz: {{ kube_apiserver_readyz.stdout }}"
