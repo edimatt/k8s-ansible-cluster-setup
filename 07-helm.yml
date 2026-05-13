@@ -6,7 +6,7 @@
 
   vars:
     helm_version: "v4.1.1"
-    helm_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+    helm_arch: "{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'amd64' }}"
     helm_os: linux
     helm_archive: "helm-{{ helm_version }}-{{ helm_os }}-{{ helm_arch }}.tar.gz"
     helm_download_url: "https://get.helm.sh/{{ helm_archive }}"

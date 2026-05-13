@@ -14,7 +14,7 @@
     cilium_gateway_class_name: cilium
 
     # Cilium core
-    cilium_k8s_service_host: "{{ ansible_default_ipv4.address }}"
+    cilium_k8s_service_host: "{{ ansible_facts['default_ipv4']['address'] }}"
     cilium_k8s_service_port: "6443"
     cilium_k8s_client_qps: 10
     cilium_k8s_client_burst: 20
@@ -32,7 +32,7 @@
 
     # Hubble CLI
     hubble_cli_install_dir: /usr/local/bin
-    hubble_cli_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+    hubble_cli_arch: "{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'amd64' }}"
 
   environment:
     KUBECONFIG: "{{ kubeconfig_path }}"

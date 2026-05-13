@@ -3,30 +3,28 @@
 Run the playbooks from this directory. The inventory is configured in
 `ansible.cfg` and points to `inventory/hosts.ini`.
 
-If sudo on the target still requires a password, run the full bootstrap with
-`-K` the first time:
-
-```bash
-./bootstrap.sh -K
-```
-
-`bootstrap.sh -K` still runs the whole bootstrap. The first playbook is
-`00-sudo-nopass.yml`: it uses the sudo password you enter, creates
-`/etc/sudoers.d/<ssh-user>`, validates it with `visudo`, and then continues with
-the rest of the Kubernetes setup.
-
-After the first successful run, sudo passwordless is configured and future
-bootstraps can run without `-K`:
+Run the full bootstrap:
 
 ```bash
 ./bootstrap.sh
 ```
 
+The first playbook is `00-sudo-nopass.yml`. It checks whether passwordless sudo
+already works. If not, it prompts for the sudo password, creates
+`/etc/sudoers.d/<ssh-user>`, validates it with `visudo`, and then the bootstrap
+continues.
+
+After the first successful run, sudo passwordless is configured and future
+bootstraps should not prompt for sudo.
+
 To configure only passwordless sudo and stop there, run:
 
 ```bash
-ansible-playbook 00-sudo-nopass.yml -K
+ansible-playbook 00-sudo-nopass.yml
 ```
+
+This playbook prompts for the sudo password itself, without using Ansible
+`become`.
 
 ## Inventory
 
@@ -64,16 +62,33 @@ Run the full bootstrap:
 ./bootstrap.sh
 ```
 
-If sudo on the target requires a password:
-
-```bash
-./bootstrap.sh -K
-```
-
 Resume from a specific playbook:
 
 ```bash
 ./bootstrap.sh --from 09-cilium-platform.yml
+```
+
+Run Ansible check mode through the bootstrap sequence:
+
+```bash
+./bootstrap.sh --check
+```
+
+`00-sudo-nopass.yml` is skipped in check mode because it bootstraps sudo with
+raw commands.
+
+Run syntax checks through the bootstrap sequence:
+
+```bash
+./bootstrap.sh --syntax-check
+```
+
+Pass extra arguments directly to `ansible-playbook`. Everything after `--` is
+forwarded unchanged. For example, `--limit` runs the bootstrap only on matching
+inventory hosts or groups:
+
+```bash
+./bootstrap.sh -- --limit k8s_control_plane
 ```
 
 ## Reset
@@ -100,7 +115,7 @@ Reset when sudo on the target requires a password:
 ## Bootstrap Order
 
 ```bash
-ansible-playbook 00-sudo-nopass.yml -K
+ansible-playbook 00-sudo-nopass.yml
 ansible-playbook 00-preflight.yml
 ansible-playbook 01-os-prep.yml
 ansible-playbook 02-firewall.yml
@@ -142,13 +157,7 @@ kept permissive with `enforce=privileged`, while `audit` and `warn` use the
 `restricted` profile so violations are visible without breaking existing lab
 workloads.
 
-The playbook also creates three lab namespaces:
-
-```text
-cks-privileged  enforce=privileged, audit=restricted, warn=restricted
-cks-baseline    enforce=baseline, audit=restricted, warn=restricted
-cks-restricted  enforce=restricted, audit=restricted, warn=restricted
-```
+The playbook does not create permanent test namespaces.
 
 ## Common Commands
 

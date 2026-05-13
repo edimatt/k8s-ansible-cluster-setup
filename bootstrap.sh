@@ -27,24 +27,21 @@ playbooks=(
 default_cilium_lb_pool_blocks='[{"start":"192.168.1.80","stop":"192.168.1.89"}]'
 cilium_lb_pool_blocks="${CILIUM_LB_POOL_BLOCKS:-$default_cilium_lb_pool_blocks}"
 from_playbook=""
-ask_become_pass=false
 syntax_check=false
 ansible_mode=()
 ansible_args=()
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 cilium_extra_vars_file="${tmpdir}/cilium-extra-vars.json"
-become_extra_vars_file="${tmpdir}/become-extra-vars.yml"
 
 printf '{"cilium_lb_pool_blocks":%s}\n' "$cilium_lb_pool_blocks" > "$cilium_extra_vars_file"
 
 usage() {
   printf '%s\n' \
-    "Usage: ./bootstrap.sh [--from PLAYBOOK] [-K|--ask-become-pass] [--check] [--syntax-check] [-- ANSIBLE_ARGS...]" \
+    "Usage: ./bootstrap.sh [--from PLAYBOOK] [--check] [--syntax-check] [-- ANSIBLE_ARGS...]" \
     "" \
     "Examples:" \
     "  ./bootstrap.sh" \
-    "  ./bootstrap.sh -K" \
     "  ./bootstrap.sh --from 09-cilium-platform.yml" \
     "  CILIUM_LB_POOL_BLOCKS='[{\"start\":\"192.168.1.80\",\"stop\":\"192.168.1.99\"}]' ./bootstrap.sh" \
     "  ./bootstrap.sh -- --limit k8s_control_plane"
@@ -70,10 +67,6 @@ while [[ $# -gt 0 ]]; do
       syntax_check=true
       shift
       ;;
-    -K|--ask-become-pass)
-      ask_become_pass=true
-      shift
-      ;;
     -h|--help)
       usage
       exit 0
@@ -90,23 +83,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-if [[ "$syntax_check" != true && "$ask_become_pass" == true ]]; then
-  if [[ -z "${ANSIBLE_BECOME_PASSWORD:-}" ]]; then
-    printf '%s' 'BECOME password: '
-    read -r -s become_password
-    printf '\n'
-  else
-    become_password="$ANSIBLE_BECOME_PASSWORD"
-  fi
-
-  {
-    printf 'ansible_become_password: |-\n'
-    printf '  %s\n' "$become_password"
-  } > "$become_extra_vars_file"
-  chmod 600 "$become_extra_vars_file"
-  unset become_password
-fi
 
 start_index=0
 if [[ -n "$from_playbook" ]]; then
@@ -132,10 +108,6 @@ for index in "${!playbooks[@]}"; do
 
   playbook="${playbooks[$index]}"
   cmd=(ansible-playbook "${ansible_mode[@]}" "$playbook")
-
-  if [[ -s "$become_extra_vars_file" ]]; then
-    cmd+=(-e "@${become_extra_vars_file}")
-  fi
 
   if [[ "$playbook" == "09-cilium-platform.yml" ]]; then
     cmd+=(-e "@${cilium_extra_vars_file}")

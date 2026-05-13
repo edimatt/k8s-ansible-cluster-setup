@@ -9,11 +9,11 @@
       ansible.builtin.debug:
         msg:
           - "Host: {{ inventory_hostname }}"
-          - "Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}"
-          - "Kernel: {{ ansible_kernel }}"
-          - "Architecture: {{ ansible_architecture }}"
-          - "CPU cores: {{ ansible_processor_vcpus }}"
-          - "Memory MB: {{ ansible_memtotal_mb }}"
+          - "Distribution: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"
+          - "Kernel: {{ ansible_facts['kernel'] }}"
+          - "Architecture: {{ ansible_facts['architecture'] }}"
+          - "CPU cores: {{ ansible_facts['processor_vcpus'] }}"
+          - "Memory MB: {{ ansible_facts['memtotal_mb'] }}"
 
     - name: Check swap status
       ansible.builtin.command: swapon --show
