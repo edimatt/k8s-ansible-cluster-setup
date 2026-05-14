@@ -21,3 +21,4 @@
       failed_when:
         - remove_control_plane_taint.rc != 0
         - "'not found' not in remove_control_plane_taint.stderr"
+      when: groups.get('k8s_workers', []) | length == 0

@@ -11,6 +11,7 @@ playbooks=(
   03-containerd.yml
   04-kubernetes-packages.yml
   05-kubeadm-init.yml
+  05-worker-join.yml
   06-single-node.yml
   07-helm.yml
   08-cilium-cli.yml
@@ -27,6 +28,7 @@ playbooks=(
 default_cilium_lb_pool_blocks='[{"start":"192.168.1.80","stop":"192.168.1.89"}]'
 cilium_lb_pool_blocks="${CILIUM_LB_POOL_BLOCKS:-$default_cilium_lb_pool_blocks}"
 from_playbook=""
+limit_pattern=""
 syntax_check=false
 ansible_mode=()
 ansible_args=()
@@ -36,15 +38,34 @@ cilium_extra_vars_file="${tmpdir}/cilium-extra-vars.json"
 
 printf '{"cilium_lb_pool_blocks":%s}\n' "$cilium_lb_pool_blocks" > "$cilium_extra_vars_file"
 
+limit_scope() {
+  case "$limit_pattern" in
+    "")
+      printf 'all\n'
+      ;;
+    k8s_workers|k8s-worker-*|*":k8s_workers"|*"k8s_workers:"*|*":k8s-worker-"*)
+      printf 'worker\n'
+      ;;
+    k8s_control_plane|k8s-control-*|*":k8s_control_plane"|*"k8s_control_plane:"*|*":k8s-control-"*)
+      printf 'control_plane\n'
+      ;;
+    *)
+      printf 'custom\n'
+      ;;
+  esac
+}
+
 usage() {
   printf '%s\n' \
-    "Usage: ./bootstrap.sh [--from PLAYBOOK] [--check] [--syntax-check] [-- ANSIBLE_ARGS...]" \
+    "Usage: ./bootstrap.sh [--from PLAYBOOK] [--limit HOST_OR_GROUP] [--check] [--syntax-check] [-- ANSIBLE_ARGS...]" \
     "" \
     "Examples:" \
     "  ./bootstrap.sh" \
+    "  ./bootstrap.sh --limit k8s_control_plane" \
+    "  ./bootstrap.sh --limit k8s-worker-01" \
     "  ./bootstrap.sh --from 09-cilium-platform.yml" \
     "  CILIUM_LB_POOL_BLOCKS='[{\"start\":\"192.168.1.80\",\"stop\":\"192.168.1.99\"}]' ./bootstrap.sh" \
-    "  ./bootstrap.sh -- --limit k8s_control_plane"
+    "  ./bootstrap.sh -- --tags some_tag"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -61,6 +82,16 @@ while [[ $# -gt 0 ]]; do
     --check)
       ansible_mode+=(--check)
       shift
+      ;;
+    -l|--limit)
+      if [[ $# -lt 2 ]]; then
+        printf 'Missing value for --limit\n' >&2
+        usage >&2
+        exit 2
+      fi
+      limit_pattern="$2"
+      ansible_args+=(--limit "$2")
+      shift 2
       ;;
     --syntax-check)
       ansible_mode+=(--syntax-check)
@@ -107,6 +138,24 @@ for index in "${!playbooks[@]}"; do
   fi
 
   playbook="${playbooks[$index]}"
+  scope="$(limit_scope)"
+
+  if [[ "$syntax_check" == false ]]; then
+    if [[ "$scope" == "control_plane" && "$playbook" == "05-worker-join.yml" ]]; then
+      continue
+    fi
+
+    if [[ "$scope" == "worker" ]]; then
+      case "$playbook" in
+        00-sudo-nopass.yml|00-preflight.yml|01-os-prep.yml|02-firewall.yml|03-containerd.yml|04-kubernetes-packages.yml|05-worker-join.yml)
+          ;;
+        *)
+          continue
+          ;;
+      esac
+    fi
+  fi
+
   cmd=(ansible-playbook "${ansible_mode[@]}" "$playbook")
 
   if [[ "$playbook" == "09-cilium-platform.yml" ]]; then
@@ -117,4 +166,8 @@ for index in "${!playbooks[@]}"; do
 
   printf '\n==> %s\n' "$playbook"
   "${cmd[@]}"
+
+  if [[ "$playbook" == "05-worker-join.yml" && "$scope" == "worker" && "$syntax_check" == false ]]; then
+    break
+  fi
 done

@@ -28,18 +28,22 @@ This playbook prompts for the sudo password itself, without using Ansible
 
 ## Inventory
 
-The inventory currently defines a single control-plane node:
+The inventory currently defines a single control-plane node and an empty worker
+group:
 
 ```ini
 [k8s_control_plane]
 k8s-control-01
 
+[k8s_workers]
+
 [k8s_cluster:children]
 k8s_control_plane
+k8s_workers
 ```
 
 When adding worker nodes, keep control-plane hosts in `k8s_control_plane` and
-add a worker group under `k8s_cluster`:
+add workers under `k8s_workers`:
 
 ```ini
 [k8s_control_plane]
@@ -60,6 +64,14 @@ Run the full bootstrap:
 
 ```bash
 ./bootstrap.sh
+```
+
+Limit the bootstrap to one inventory group or host:
+
+```bash
+./bootstrap.sh --limit k8s_control_plane
+./bootstrap.sh --limit k8s_cluster
+./bootstrap.sh --limit k8s-worker-01
 ```
 
 Resume from a specific playbook:
@@ -83,13 +95,37 @@ Run syntax checks through the bootstrap sequence:
 ./bootstrap.sh --syntax-check
 ```
 
-Pass extra arguments directly to `ansible-playbook`. Everything after `--` is
-forwarded unchanged. For example, `--limit` runs the bootstrap only on matching
-inventory hosts or groups:
+`--limit` accepts any Ansible inventory host or group. Use `k8s_cluster` for the
+parent group that contains both `k8s_control_plane` and `k8s_workers`.
+
+With `--limit k8s_control_plane`, the bootstrap runs the control-plane flow and
+skips `05-worker-join.yml`.
+
+With `--limit k8s_workers` or `--limit k8s-worker-01`, the bootstrap runs only
+the worker preparation playbooks through `04-kubernetes-packages.yml`, then
+`05-worker-join.yml`, and stops there. It does not run `05-kubeadm-init.yml`,
+Cilium, Helm, ingress, or
+other control-plane platform playbooks on the worker.
+
+Pass other extra arguments directly to `ansible-playbook`. Everything after `--`
+is forwarded unchanged:
 
 ```bash
-./bootstrap.sh -- --limit k8s_control_plane
+./bootstrap.sh -- --tags some_tag
 ```
+
+## Adding a Worker Node
+
+Add the new host to the inventory under `k8s_workers`, then run the bootstrap
+limited to that host:
+
+```bash
+./bootstrap.sh --limit k8s-worker-01
+```
+
+The bootstrap prepares the vanilla Ubuntu node, installs Kubernetes packages,
+and `05-worker-join.yml` joins it to the existing control plane. The join command
+is generated automatically on the first host in `k8s_control_plane`.
 
 ## Reset
 
@@ -122,6 +158,7 @@ ansible-playbook 02-firewall.yml
 ansible-playbook 03-containerd.yml
 ansible-playbook 04-kubernetes-packages.yml
 ansible-playbook 05-kubeadm-init.yml
+ansible-playbook 05-worker-join.yml
 ansible-playbook 06-single-node.yml
 ansible-playbook 07-helm.yml
 ansible-playbook 08-cilium-cli.yml
