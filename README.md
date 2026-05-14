@@ -60,10 +60,23 @@ k8s_workers
 
 ## Bootstrap
 
-Run the full bootstrap:
+For a new cluster, bootstrap the control plane first:
 
 ```bash
-./bootstrap.sh
+./bootstrap.sh --limit k8s_control_plane
+```
+
+Then add worker hosts to `inventory/hosts.ini` under `k8s_workers` and bootstrap
+them:
+
+```bash
+./bootstrap.sh --limit k8s_workers
+```
+
+Run the full bootstrap against every host in `k8s_cluster`:
+
+```bash
+./bootstrap.sh --limit k8s_cluster
 ```
 
 Limit the bootstrap to one inventory group or host:
@@ -104,8 +117,7 @@ skips `05-worker-join.yml`.
 With `--limit k8s_workers` or `--limit k8s-worker-01`, the bootstrap runs only
 the worker preparation playbooks through `04-kubernetes-packages.yml`, then
 `05-worker-join.yml`, and stops there. It does not run `05-kubeadm-init.yml`,
-Cilium, Helm, ingress, or
-other control-plane platform playbooks on the worker.
+Cilium, Helm, ingress, or other control-plane platform playbooks on the worker.
 
 Pass other extra arguments directly to `ansible-playbook`. Everything after `--`
 is forwarded unchanged:
@@ -149,6 +161,9 @@ Reset when sudo on the target requires a password:
 ```
 
 ## Bootstrap Order
+
+The two `05-*` playbooks are alternative node-role steps: `05-kubeadm-init.yml`
+runs on the control plane, while `05-worker-join.yml` runs on workers.
 
 ```bash
 ansible-playbook 00-sudo-nopass.yml
