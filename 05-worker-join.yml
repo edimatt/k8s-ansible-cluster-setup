@@ -38,3 +38,14 @@
       retries: 30
       delay: 10
       until: worker_node_registered.rc == 0
+
+    - name: Label worker node role
+      ansible.builtin.command: >
+        kubectl label node {{ inventory_hostname }}
+        node-role.kubernetes.io/worker=
+        --overwrite
+      delegate_to: "{{ control_plane_host }}"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: worker_node_role_label
+      changed_when: "'not labeled' not in worker_node_role_label.stdout"
