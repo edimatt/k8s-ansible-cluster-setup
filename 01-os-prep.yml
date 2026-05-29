@@ -61,8 +61,24 @@
           - less
           - gpg
           - gnupg
+          - locales
           - lsb-release
           - software-properties-common
           - vim
         state: present
         update_cache: true
+
+    - name: Generate en_US.UTF-8 locale
+      community.general.locale_gen:
+        name: en_US.UTF-8
+        state: present
+
+    - name: Configure default system locale
+      ansible.builtin.copy:
+        dest: /etc/default/locale
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          LANG=en_US.UTF-8
+          LC_ALL=en_US.UTF-8
