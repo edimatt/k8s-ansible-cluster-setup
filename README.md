@@ -186,6 +186,7 @@ ansible-playbook 13-cert-manager.yml
 ansible-playbook 14-nginx-ingress-lab.yml
 # ansible-playbook 15-monitoring.yml
 # ansible-playbook 16-pod-security-admission.yml
+ansible-playbook 17-spark-operator.yml
 ```
 
 ## Firewall
