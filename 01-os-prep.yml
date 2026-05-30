@@ -65,8 +65,18 @@
           - lsb-release
           - software-properties-common
           - vim
+          - chrony
+          - sysstat
         state: present
         update_cache: true
+
+    - name: Stop and disable systemd-timesyncd if present
+      ansible.builtin.systemd:
+        name: systemd-timesyncd
+        state: stopped
+        enabled: false
+      failed_when: false
+      notify: Restart chrony
 
     - name: Generate en_US.UTF-8 locale
       community.general.locale_gen:
@@ -82,3 +92,104 @@
         content: |
           LANG=en_US.UTF-8
           LC_ALL=en_US.UTF-8
+
+    - name: Enable sysstat data collection
+      ansible.builtin.copy:
+        dest: /etc/default/sysstat
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          ENABLED="true"
+
+    - name: Ensure chrony sources directory exists
+      ansible.builtin.file:
+        path: /etc/chrony/sources.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Find existing chrony source files
+      ansible.builtin.find:
+        paths: /etc/chrony/sources.d
+        file_type: file
+        recurse: false
+      register: chrony_source_files
+
+    - name: Remove unmanaged chrony source files
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ chrony_source_files.files }}"
+      when: item.path != "/etc/chrony/sources.d/clean.sources"
+      notify: Restart chrony
+
+    - name: Create clean chrony source configuration
+      ansible.builtin.copy:
+        dest: /etc/chrony/sources.d/clean.sources
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          server ntp0.edu-zg.io iburst prefer
+          server bwntpo.bluewin.ch iburst
+          server ntp11.metas.ch iburst
+          server ntp12.metas.ch iburst
+      notify: Restart chrony
+
+    - name: Flush handlers before chrony verification
+      ansible.builtin.meta: flush_handlers
+
+    - name: Burst chrony sources
+      ansible.builtin.command:
+        argv:
+          - chronyc
+          - -a
+          - burst 4/4
+      changed_when: false
+
+    - name: Step the clock with chrony
+      ansible.builtin.command:
+        argv:
+          - chronyc
+          - -a
+          - makestep 0.1 -1
+      changed_when: false
+
+    - name: Wait for chrony synchronization
+      ansible.builtin.command:
+        argv:
+          - chronyc
+          - tracking
+      register: chrony_tracking
+      changed_when: false
+      retries: 6
+      delay: 5
+      until:
+        - "chrony_tracking.stdout is search('Leap status\\s+: Normal')"
+        - "chrony_tracking.stdout is not search('Stratum\\s+: 0')"
+
+    - name: Show chrony tracking status
+      ansible.builtin.debug:
+        var: chrony_tracking.stdout_lines
+
+    - name: Show chrony sources
+      ansible.builtin.command:
+        argv:
+          - chronyc
+          - sources
+          - -v
+      register: chrony_sources
+      changed_when: false
+
+    - name: Print chrony sources
+      ansible.builtin.debug:
+        var: chrony_sources.stdout_lines
+
+  handlers:
+    - name: Restart chrony
+      ansible.builtin.systemd:
+        name: chrony
+        enabled: true
+        state: restarted
