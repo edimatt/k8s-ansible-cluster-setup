@@ -116,8 +116,10 @@ skips `05-worker-join.yml`.
 
 With `--limit k8s_workers` or `--limit k8s-worker-01`, the bootstrap runs only
 the worker preparation playbooks through `04-kubernetes-packages.yml`, then
-`05-worker-join.yml`, and stops there. It does not run `05-kubeadm-init.yml`,
-Cilium, Helm, ingress, or other control-plane platform playbooks on the worker.
+`05-worker-join.yml`, skips the control-plane platform playbooks, runs
+`17-kube-bench.yml`, and stops there. It does not run `05-kubeadm-init.yml`,
+Cilium, Helm, ingress, or other control-plane-only platform playbooks on the
+worker.
 
 Pass other extra arguments directly to `ansible-playbook`. Everything after `--`
 is forwarded unchanged:
@@ -186,7 +188,17 @@ ansible-playbook 13-cert-manager.yml
 ansible-playbook 14-nginx-ingress-lab.yml
 # ansible-playbook 15-monitoring.yml
 # ansible-playbook 16-pod-security-admission.yml
+ansible-playbook 17-kube-bench.yml
 ansible-playbook 17-spark-operator.yml
+```
+
+## Kube-bench
+
+`17-kube-bench.yml` installs the pinned kube-bench Debian package on every host
+in `k8s_cluster`. Run checks on each node with Ansible:
+
+```bash
+ansible k8s_cluster -b -a "kube-bench run"
 ```
 
 ## Firewall
