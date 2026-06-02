@@ -117,9 +117,9 @@ skips `05-worker-join.yml`.
 With `--limit k8s_workers` or `--limit k8s-worker-01`, the bootstrap runs only
 the worker preparation playbooks through `04-kubernetes-packages.yml`, then
 `05-worker-join.yml`, skips the control-plane platform playbooks, runs
-`17-kube-bench.yml`, and stops there. It does not run `05-kubeadm-init.yml`,
-Cilium, Helm, ingress, or other control-plane-only platform playbooks on the
-worker.
+`17-kube-bench.yml` and `18-trivy.yml`, and stops there. It does not run
+`05-kubeadm-init.yml`, Cilium, Helm, ingress, or other control-plane-only
+platform playbooks on the worker.
 
 Pass other extra arguments directly to `ansible-playbook`. Everything after `--`
 is forwarded unchanged:
@@ -189,6 +189,9 @@ ansible-playbook 14-nginx-ingress-lab.yml
 # ansible-playbook 15-monitoring.yml
 # ansible-playbook 16-pod-security-admission.yml
 ansible-playbook 17-kube-bench.yml
+ansible-playbook 18-trivy.yml
+ansible-playbook 19-kyverno.yml
+ansible-playbook 20-falco.yml
 ansible-playbook 17-spark-operator.yml
 ```
 
@@ -199,6 +202,45 @@ in `k8s_cluster`. Run checks on each node with Ansible:
 
 ```bash
 ansible k8s_cluster -b -a "kube-bench run"
+```
+
+## Trivy
+
+`18-trivy.yml` installs the Trivy CLI from the official Aqua Security APT
+repository on every host in `k8s_cluster`. Run a cluster scan from a
+control-plane node with:
+
+```bash
+sudo KUBECONFIG=/etc/kubernetes/admin.conf trivy k8s cluster --report summary
+```
+
+## Kyverno
+
+`19-kyverno.yml` installs Kyverno with the official Helm chart on the control
+plane and adds CKS lab policies: one policy audits Pods against the latest
+restricted Pod Security Standards, and one simple enforce policy blocks
+privileged containers outside system namespaces.
+
+Inspect Kyverno and policy reports:
+
+```bash
+kubectl -n kyverno get pods
+kubectl get clusterpolicies
+kubectl get policyreports -A
+```
+
+## Falco
+
+`20-falco.yml` installs Falco with the official Falco Security Helm chart on the
+control plane. The chart deploys Falco as a DaemonSet so runtime detection runs
+on every node, which fits CKS practice for behavioral detection and incident
+response.
+
+Inspect Falco:
+
+```bash
+kubectl -n falco get pods -o wide
+kubectl -n falco logs -l app.kubernetes.io/name=falco -c falco --tail=50
 ```
 
 ## Firewall

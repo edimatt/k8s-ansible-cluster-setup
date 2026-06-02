@@ -24,6 +24,9 @@ playbooks=(
   # 15-monitoring.yml
   # 16-pod-security-admission.yml
   17-kube-bench.yml
+  18-trivy.yml
+  19-kyverno.yml
+  20-falco.yml
   17-spark-operator.yml
 )
 
@@ -149,7 +152,7 @@ for index in "${!playbooks[@]}"; do
 
     if [[ "$scope" == "worker" ]]; then
       case "$playbook" in
-        00-sudo-nopass.yml|00-preflight.yml|01-os-prep.yml|02-firewall.yml|03-containerd.yml|04-kubernetes-packages.yml|05-worker-join.yml|17-kube-bench.yml)
+        00-sudo-nopass.yml|00-preflight.yml|01-os-prep.yml|02-firewall.yml|03-containerd.yml|04-kubernetes-packages.yml|05-worker-join.yml|17-kube-bench.yml|18-trivy.yml)
           ;;
         *)
           continue
@@ -169,7 +172,7 @@ for index in "${!playbooks[@]}"; do
   printf '\n==> %s\n' "$playbook"
   "${cmd[@]}"
 
-  if [[ "$playbook" == "17-kube-bench.yml" && "$scope" == "worker" && "$syntax_check" == false ]]; then
+  if [[ "$playbook" == "18-trivy.yml" && "$scope" == "worker" && "$syntax_check" == false ]]; then
     break
   fi
 done
