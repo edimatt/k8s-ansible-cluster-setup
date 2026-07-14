@@ -4,14 +4,95 @@
   become: true
   gather_facts: true
 
+  vars:
+    cri_tools_version: "v1.35.0"
+    cri_tools_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+      arm64: arm64
+    cri_tools_arch: "{{ cri_tools_arch_map.get(ansible_facts['architecture'], '') }}"
+    cri_tools_install_dir: /usr/local/bin
+    cri_tools_archive_name: "crictl-{{ cri_tools_version }}-linux-{{ cri_tools_arch }}.tar.gz"
+    cri_tools_archive_path: "/tmp/{{ cri_tools_archive_name }}"
+    cri_tools_download_url: "https://github.com/kubernetes-sigs/cri-tools/releases/download/{{ cri_tools_version }}/{{ cri_tools_archive_name }}"
+
   tasks:
+    - name: Validate supported CPU architecture for cri-tools
+      ansible.builtin.assert:
+        that:
+          - cri_tools_arch | length > 0
+        fail_msg: "Unsupported cri-tools architecture: {{ ansible_facts['architecture'] }}"
+
     - name: Install containerd
       ansible.builtin.apt:
         name:
           - containerd
-          - cri-tools
         state: present
         update_cache: true
+
+    - name: Check whether cri-tools is available in apt
+      ansible.builtin.command:
+        argv:
+          - apt-cache
+          - show
+          - cri-tools
+      register: cri_tools_package_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install cri-tools when available
+      ansible.builtin.apt:
+        name:
+          - cri-tools
+        state: present
+      when: cri_tools_package_check.rc == 0
+
+    - name: Check installed crictl version
+      ansible.builtin.command:
+        argv:
+          - crictl
+          - --version
+      register: crictl_version_check
+      changed_when: false
+      failed_when: false
+      when: cri_tools_package_check.rc != 0
+
+    - name: Download cri-tools archive when apt package is unavailable
+      ansible.builtin.get_url:
+        url: "{{ cri_tools_download_url }}"
+        dest: "{{ cri_tools_archive_path }}"
+        owner: root
+        group: root
+        mode: '0644'
+      when:
+        - cri_tools_package_check.rc != 0
+        - crictl_version_check.stdout | default('') is not search(cri_tools_version)
+        - not ansible_check_mode
+
+    - name: Extract crictl binary when apt package is unavailable
+      ansible.builtin.unarchive:
+        src: "{{ cri_tools_archive_path }}"
+        dest: "{{ cri_tools_install_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - cri_tools_package_check.rc != 0
+        - crictl_version_check.stdout | default('') is not search(cri_tools_version)
+        - not ansible_check_mode
+
+    - name: Report cri-tools fallback in check mode
+      ansible.builtin.debug:
+        msg: >-
+          crictl {{ cri_tools_version }} would be installed from upstream because
+          the cri-tools apt package is unavailable on
+          {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}.
+      changed_when: true
+      when:
+        - cri_tools_package_check.rc != 0
+        - crictl_version_check.stdout | default('') is not search(cri_tools_version)
+        - ansible_check_mode
 
     - name: Create containerd config directory
       ansible.builtin.file:
@@ -63,6 +144,17 @@
       register: containerd_status
       changed_when: false
 
+    - name: Check crictl version
+      ansible.builtin.command:
+        argv:
+          - crictl
+          - --version
+      register: crictl_installed_version
+      changed_when: false
+      when: not ansible_check_mode
+
     - name: Show containerd status
       ansible.builtin.debug:
-        var: containerd_status.stdout
+        msg:
+          - "containerd: {{ containerd_status.stdout }}"
+          - "crictl: {{ crictl_installed_version.stdout | default('not checked') }}"

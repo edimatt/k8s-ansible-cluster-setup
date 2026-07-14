@@ -13,6 +13,7 @@
     monitoring_chart_repo_url: https://prometheus-community.github.io/helm-charts
     monitoring_chart_ref: prometheus-community/kube-prometheus-stack
     monitoring_chart_version: "84.3.0"
+    monitoring_helm_timeout: 20m
 
     grafana_admin_password: admin
 
@@ -79,6 +80,29 @@
             adminPassword: "{{ grafana_admin_password }}"
             service:
               type: ClusterIP
+            startupProbe:
+              enabled: true
+              path: /api/health
+              initialDelaySeconds: 30
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 60
+            readinessProbe:
+              httpGet:
+                path: /api/health
+                port: 3000
+              initialDelaySeconds: 30
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 12
+            livenessProbe:
+              httpGet:
+                path: /api/health
+                port: 3000
+              initialDelaySeconds: 90
+              periodSeconds: 10
+              timeoutSeconds: 10
+              failureThreshold: 12
 
           prometheus:
             prometheusSpec:
@@ -100,6 +124,22 @@
           nodeExporter:
             enabled: true
 
+    - name: Check current monitoring Helm release status
+      ansible.builtin.command: >
+        helm status {{ monitoring_release_name }} -n {{ monitoring_namespace }}
+      register: monitoring_helm_status_before
+      changed_when: false
+      failed_when: false
+
+    - name: Remove stale failed or pending monitoring Helm release
+      ansible.builtin.command: >
+        helm uninstall {{ monitoring_release_name }} -n {{ monitoring_namespace }} --wait
+      register: monitoring_release_cleanup
+      changed_when: monitoring_release_cleanup.rc == 0
+      when:
+        - monitoring_helm_status_before.rc == 0
+        - "'STATUS: failed' in monitoring_helm_status_before.stdout or 'STATUS: pending-' in monitoring_helm_status_before.stdout"
+
     # NOTE:
     # helm upgrade --install may report "upgraded" even when rendered manifests are unchanged.
     # This is acceptable for now because Helm is the desired release manager for the monitoring stack.
@@ -113,8 +153,11 @@
         --values /tmp/kube-prometheus-stack-values.yml
         --wait
         --wait-for-jobs
-        --timeout 10m
+        --timeout {{ monitoring_helm_timeout }}
       register: monitoring_helm_install
+      retries: 2
+      delay: 15
+      until: monitoring_helm_install.rc == 0
       changed_when: >
         'has been upgraded' in monitoring_helm_install.stdout or
         'has been installed' in monitoring_helm_install.stdout

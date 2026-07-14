@@ -28,14 +28,14 @@ This playbook prompts for the sudo password itself, without using Ansible
 
 ## Inventory
 
-The inventory currently defines a single control-plane node and an empty worker
-group:
+The inventory currently defines one control-plane node and one worker node:
 
 ```ini
 [k8s_control_plane]
 k8s-control-01
 
 [k8s_workers]
+k8s-worker-01
 
 [k8s_cluster:children]
 k8s_control_plane
@@ -111,6 +111,21 @@ Run syntax checks through the bootstrap sequence:
 `--limit` accepts any Ansible inventory host or group. Use `k8s_cluster` for the
 parent group that contains both `k8s_control_plane` and `k8s_workers`.
 
+The bootstrap passes a default Cilium LoadBalancer pool containing
+`192.168.1.80` through `192.168.1.89`. Override it with the
+`CILIUM_LB_POOL_BLOCKS` environment variable when that range is not available
+on the lab network:
+
+```bash
+CILIUM_LB_POOL_BLOCKS='[{"start":"192.168.1.100","stop":"192.168.1.109"}]' \
+  ./bootstrap.sh
+```
+
+The same value can be passed directly to the Cilium playbook with
+`-e/--extra-vars`. The pool must be reachable on the node LAN, and the
+interface used by the L2 announcement policy defaults to `enp0s1`; override
+`cilium_l2_interface_regex` if the nodes use another interface.
+
 With `--limit k8s_control_plane`, the bootstrap runs the control-plane flow and
 skips `05-worker-join.yml`.
 
@@ -140,6 +155,13 @@ limited to that host:
 The bootstrap prepares the vanilla Ubuntu node, installs Kubernetes packages,
 and `05-worker-join.yml` joins it to the existing control plane. The join command
 is generated automatically on the first host in `k8s_control_plane`.
+
+## Container Runtime
+
+`03-containerd.yml` installs containerd with systemd cgroups and configures
+`crictl` to use the containerd socket. It installs `cri-tools` from APT when
+available; otherwise it downloads the pinned `crictl` `v1.35.0` archive for
+`amd64` or `arm64` from the upstream Kubernetes cri-tools release.
 
 ## Reset
 
@@ -193,6 +215,33 @@ ansible-playbook 18-trivy.yml
 ansible-playbook 19-kyverno.yml
 ansible-playbook 20-falco.yml
 ansible-playbook 17-spark-operator.yml
+```
+
+The bootstrap script currently comments out `15-monitoring.yml` and
+`16-pod-security-admission.yml`; run either playbook explicitly when needed.
+
+## Ingress And Monitoring
+
+`14-nginx-ingress-lab.yml` installs the pinned ingress-nginx chart as a
+`LoadBalancer` Service by default. It waits for an external address from
+Cilium LoadBalancer IPAM/L2 and fails with a remediation message if no address
+is assigned. For a lab that does not provide LoadBalancer addresses, use:
+
+```bash
+ansible-playbook 14-nginx-ingress-lab.yml \
+  -e nginx_ingress_service_type=NodePort
+```
+
+The playbook cleans up stale pending Helm releases and retries failed Helm
+installations. `15-monitoring.yml` applies the same stale-release cleanup and
+retry behavior, waits up to 20 minutes for the kube-prometheus-stack release,
+and gives Grafana startup, readiness, and liveness probes enough time for a
+slow lab node to initialize.
+
+Run monitoring separately when required:
+
+```bash
+ansible-playbook 15-monitoring.yml
 ```
 
 ## Kube-bench

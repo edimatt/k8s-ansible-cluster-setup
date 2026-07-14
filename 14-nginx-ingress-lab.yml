@@ -16,6 +16,7 @@
     nginx_ingress_values_path: /tmp/ingress-nginx-values.yml
     nginx_ingress_class_name: nginx
     nginx_ingress_default_class: true
+    nginx_ingress_service_type: LoadBalancer
 
   environment:
     KUBECONFIG: "{{ kubeconfig_path }}"
@@ -64,7 +65,23 @@
             # In this cluster, LoadBalancer Services are handled by Cilium.
             # Cilium LB IPAM / L2 or BGP announcement is configured separately.
             service:
-              type: LoadBalancer
+              type: {{ nginx_ingress_service_type }}
+
+    - name: Check current ingress-nginx Helm release status
+      ansible.builtin.command: >
+        helm status {{ nginx_ingress_release_name }} -n {{ nginx_ingress_namespace }}
+      register: nginx_ingress_helm_status_before
+      changed_when: false
+      failed_when: false
+
+    - name: Remove stale pending ingress-nginx Helm release
+      ansible.builtin.command: >
+        helm uninstall {{ nginx_ingress_release_name }} -n {{ nginx_ingress_namespace }} --wait
+      register: nginx_ingress_pending_release_cleanup
+      changed_when: nginx_ingress_pending_release_cleanup.rc == 0
+      when:
+        - nginx_ingress_helm_status_before.rc == 0
+        - "'STATUS: pending-' in nginx_ingress_helm_status_before.stdout"
 
     - name: Install or upgrade ingress-nginx with Helm
       ansible.builtin.command: >
@@ -76,6 +93,9 @@
         --wait
         --timeout 10m
       register: nginx_ingress_helm_install
+      retries: 3
+      delay: 15
+      until: nginx_ingress_helm_install.rc == 0
       changed_when: >
         'has been upgraded' in nginx_ingress_helm_install.stdout or
         'has been installed' in nginx_ingress_helm_install.stdout or
@@ -115,6 +135,18 @@
       retries: 24
       delay: 5
       until: nginx_ingress_loadbalancer_address.rc == 0 and nginx_ingress_loadbalancer_address.stdout | length > 0
+      when: nginx_ingress_service_type == 'LoadBalancer'
+
+    - name: Require ingress-nginx LoadBalancer address when using LoadBalancer service
+      ansible.builtin.assert:
+        that:
+          - nginx_ingress_loadbalancer_address.stdout | default('') | length > 0
+        fail_msg: >-
+          ingress-nginx is running but its LoadBalancer service has no external address.
+          Configure Cilium LoadBalancer IPAM/L2 first with 09-cilium-platform.yml
+          and set cilium_lb_pool_blocks, or rerun this play with
+          -e nginx_ingress_service_type=NodePort.
+      when: nginx_ingress_service_type == 'LoadBalancer'
 
     - name: Show Helm release
       ansible.builtin.command: >

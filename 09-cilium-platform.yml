@@ -23,7 +23,9 @@
     # LoadBalancer / L2 announcements
     cilium_lb_pool_name: lan-pool
     cilium_lb_allow_first_last_ips: "No"
-    cilium_lb_pool_blocks: []
+    cilium_lb_pool_blocks:
+      - start: 192.168.1.80
+        stop: 192.168.1.89
 
     cilium_l2_policy_name: lan-l2-announcement
     cilium_l2_interface_regex: "^enp0s1$"
@@ -402,6 +404,24 @@
         kubectl apply -f /tmp/cilium-l2-announcement-policy.yml
       register: cilium_l2_policy_apply
       changed_when: "'created' in cilium_l2_policy_apply.stdout or 'configured' in cilium_l2_policy_apply.stdout"
+
+    - name: Verify Cilium LoadBalancer IP pool exists
+      ansible.builtin.command: >
+        kubectl get ciliumloadbalancerippools.cilium.io {{ cilium_lb_pool_name }}
+      register: cilium_lb_pool_check
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: cilium_lb_pool_check.rc == 0
+
+    - name: Verify Cilium L2 announcement policy exists
+      ansible.builtin.command: >
+        kubectl get ciliuml2announcementpolicies.cilium.io {{ cilium_l2_policy_name }}
+      register: cilium_l2_policy_check
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: cilium_l2_policy_check.rc == 0
 
     # Gateway API validation.
     - name: Wait for Cilium GatewayClass

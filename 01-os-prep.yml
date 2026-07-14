@@ -71,9 +71,11 @@
           - locales
           - lsb-release
           - software-properties-common
+          - dialog
           - vim
           - chrony
           - sysstat
+          - iotop
         state: present
         update_cache: true
         cache_valid_time: 3600
