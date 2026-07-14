@@ -1,5 +1,15 @@
 # Kubernetes Lab Bootstrap
 
+This project uses Ansible to provision a two-node Kubernetes cluster on Ubuntu:
+one control-plane node and one worker node. It automates the setup of the
+container runtime and Kubernetes packages, initializes the cluster, joins the
+worker, and installs core platform components such as Cilium, ingress, storage,
+and security tooling.
+
+It is a small, reproducible Kubernetes lab that demonstrates infrastructure
+automation, cluster bootstrapping, and the deployment of common Kubernetes
+platform services.
+
 Run the playbooks from this directory. The inventory is configured in
 `ansible.cfg` and points to `inventory/hosts.ini`.
 
