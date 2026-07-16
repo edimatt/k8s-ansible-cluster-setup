@@ -1,0 +1,14 @@
+---
+kubeconfig_path: /etc/kubernetes/admin.conf
+
+nginx_ingress_namespace: ingress-nginx
+nginx_ingress_release_name: ingress-nginx
+nginx_ingress_chart_repo_name: ingress-nginx
+nginx_ingress_chart_repo_url: https://kubernetes.github.io/ingress-nginx
+nginx_ingress_chart_ref: ingress-nginx/ingress-nginx
+nginx_ingress_chart_version: "4.15.1"
+nginx_ingress_values_path: /tmp/ingress-nginx-values.yml
+nginx_ingress_class_name: nginx
+nginx_ingress_default_class: true
+nginx_ingress_service_type: LoadBalancer
+

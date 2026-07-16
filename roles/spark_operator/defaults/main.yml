@@ -1,0 +1,17 @@
+---
+kubeconfig_path: /etc/kubernetes/admin.conf
+
+spark_operator_namespace: spark-operator
+spark_operator_job_namespace: spark
+spark_operator_release_name: spark-operator
+spark_operator_chart_repo_name: spark-operator
+spark_operator_chart_repo_url: https://kubeflow.github.io/spark-operator
+spark_operator_chart_ref: spark-operator/spark-operator
+spark_operator_chart_version: ""
+spark_operator_values_path: /tmp/spark-operator-values.yaml
+spark_operator_rbac_manifest_path: /tmp/spark-operator-job-rbac.yaml
+
+spark_operator_crds:
+  - sparkapplications.sparkoperator.k8s.io
+  - scheduledsparkapplications.sparkoperator.k8s.io
+

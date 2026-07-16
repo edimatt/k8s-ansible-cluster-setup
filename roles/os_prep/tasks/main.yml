@@ -1,0 +1,235 @@
+---
+  - name: Check active swap devices
+    ansible.builtin.command:
+      argv:
+        - swapon
+        - --noheadings
+        - --show
+    register: active_swap_devices
+    changed_when: false
+
+  - name: Disable swap immediately
+    ansible.builtin.command: swapoff -a
+    when: active_swap_devices.stdout | trim != ''
+    changed_when: true
+
+  - name: Disable swap persistently in /etc/fstab
+    ansible.builtin.replace:
+      path: /etc/fstab
+      regexp: '^([^#].*\sswap\s.*)$'
+      replace: '# \1'
+
+  - name: Configure required kernel modules for Kubernetes
+    ansible.builtin.copy:
+      dest: /etc/modules-load.d/k8s.conf
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        overlay
+        br_netfilter
+
+  - name: Load overlay module now
+    community.general.modprobe:
+      name: overlay
+      state: present
+
+  - name: Load br_netfilter module now
+    community.general.modprobe:
+      name: br_netfilter
+      state: present
+
+  - name: Configure Kubernetes sysctl settings
+    ansible.builtin.copy:
+      dest: /etc/sysctl.d/99-kubernetes-cri.conf
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        net.bridge.bridge-nf-call-iptables = 1
+        net.bridge.bridge-nf-call-ip6tables = 1
+        net.ipv4.ip_forward = 1
+    notify: Apply sysctl settings
+
+  - name: Install base packages
+    ansible.builtin.apt:
+      name:
+        - iputils-ping
+        - apt-transport-https
+        - ca-certificates
+        - cron
+        - curl
+        - less
+        - gpg
+        - gnupg
+        - locales
+        - lsb-release
+        - software-properties-common
+        - dialog
+        - vim
+        - chrony
+        - sysstat
+        - iotop
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+
+  - name: Stop and disable systemd-timesyncd if present
+    ansible.builtin.systemd:
+      name: systemd-timesyncd
+      state: stopped
+      enabled: false
+    failed_when: false
+    notify: Restart chrony
+
+  - name: Generate en_US.UTF-8 locale
+    community.general.locale_gen:
+      name: en_US.UTF-8
+      state: present
+
+  - name: Configure default system locale
+    ansible.builtin.copy:
+      dest: /etc/default/locale
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        LANG=en_US.UTF-8
+        LC_ALL=en_US.UTF-8
+
+  - name: Enable sysstat data collection
+    ansible.builtin.copy:
+      dest: /etc/default/sysstat
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        ENABLED="true"
+
+  - name: Enable and start sysstat service
+    ansible.builtin.systemd:
+      name: sysstat
+      enabled: true
+      state: started
+
+  - name: Enable and start sysstat collection timer
+    ansible.builtin.systemd:
+      name: sysstat-collect.timer
+      enabled: true
+      state: started
+
+  - name: Enable and start sysstat summary timer
+    ansible.builtin.systemd:
+      name: sysstat-summary.timer
+      enabled: true
+      state: started
+
+  - name: Ensure chrony sources directory exists
+    ansible.builtin.file:
+      path: /etc/chrony/sources.d
+      state: directory
+      owner: root
+      group: root
+      mode: '0755'
+
+  - name: Find existing chrony source files
+    ansible.builtin.find:
+      paths: /etc/chrony/sources.d
+      file_type: file
+      recurse: false
+    register: chrony_source_files
+
+  - name: Remove unmanaged chrony source files
+    ansible.builtin.file:
+      path: "{{ item.path }}"
+      state: absent
+    loop: "{{ chrony_source_files.files }}"
+    when: item.path != "/etc/chrony/sources.d/clean.sources"
+    notify: Restart chrony
+
+  - name: Create clean chrony source configuration
+    ansible.builtin.copy:
+      dest: /etc/chrony/sources.d/clean.sources
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        server ntp0.edu-zg.io iburst prefer
+        server bwntpo.bluewin.ch iburst
+        server ntp11.metas.ch iburst
+        server ntp12.metas.ch iburst
+    notify: Restart chrony
+
+  - name: Ensure chrony uses the managed source directory
+    ansible.builtin.lineinfile:
+      path: /etc/chrony/chrony.conf
+      regexp: '^sourcedir\s+'
+      line: 'sourcedir /etc/chrony/sources.d'
+      state: present
+    notify: Restart chrony
+
+  - name: Ensure chrony may step the clock early
+    ansible.builtin.lineinfile:
+      path: /etc/chrony/chrony.conf
+      regexp: '^makestep\s+'
+      line: 'makestep 1.0 3'
+      state: present
+    notify: Restart chrony
+
+  - name: Ensure chrony waits for enough sources
+    ansible.builtin.lineinfile:
+      path: /etc/chrony/chrony.conf
+      regexp: '^minsources\s+'
+      line: 'minsources 2'
+      state: present
+    notify: Restart chrony
+
+  - name: Flush handlers before chrony verification
+    ansible.builtin.meta: flush_handlers
+
+  - name: Burst chrony sources
+    ansible.builtin.command:
+      argv:
+        - chronyc
+        - -a
+        - burst 4/4
+    changed_when: false
+
+  - name: Step the clock with chrony
+    ansible.builtin.command:
+      argv:
+        - chronyc
+        - -a
+        - makestep 0.1 -1
+    changed_when: false
+
+  - name: Wait for chrony synchronization
+    ansible.builtin.command:
+      argv:
+        - chronyc
+        - tracking
+    register: chrony_tracking
+    changed_when: false
+    retries: 6
+    delay: 5
+    until:
+      - "chrony_tracking.stdout is search('Leap status\\s+: Normal')"
+      - "chrony_tracking.stdout is not search('Stratum\\s+: 0')"
+
+  - name: Show chrony tracking status
+    ansible.builtin.debug:
+      var: chrony_tracking.stdout_lines
+
+  - name: Show chrony sources
+    ansible.builtin.command:
+      argv:
+        - chronyc
+        - sources
+        - -v
+    register: chrony_sources
+    changed_when: false
+
+  - name: Print chrony sources
+    ansible.builtin.debug:
+      var: chrony_sources.stdout_lines
+

@@ -1,0 +1,37 @@
+---
+kubeconfig_path: /etc/kubernetes/admin.conf
+
+monitoring_namespace: monitoring
+monitoring_release_name: kube-prometheus-stack
+monitoring_chart_repo_name: prometheus-community
+monitoring_chart_repo_url: https://prometheus-community.github.io/helm-charts
+monitoring_chart_ref: prometheus-community/kube-prometheus-stack
+monitoring_chart_version: "84.3.0"
+monitoring_helm_timeout: 20m
+
+grafana_admin_password: admin
+
+monitoring_crds:
+  - alertmanagerconfigs.monitoring.coreos.com
+  - alertmanagers.monitoring.coreos.com
+  - podmonitors.monitoring.coreos.com
+  - probes.monitoring.coreos.com
+  - prometheusagents.monitoring.coreos.com
+  - prometheuses.monitoring.coreos.com
+  - prometheusrules.monitoring.coreos.com
+  - scrapeconfigs.monitoring.coreos.com
+  - servicemonitors.monitoring.coreos.com
+  - thanosrulers.monitoring.coreos.com
+
+monitoring_deployments:
+  - kube-prometheus-stack-grafana
+  - kube-prometheus-stack-kube-state-metrics
+  - kube-prometheus-stack-operator
+
+monitoring_statefulsets:
+  - alertmanager-kube-prometheus-stack-alertmanager
+  - prometheus-kube-prometheus-stack-prometheus
+
+monitoring_daemonsets:
+  - kube-prometheus-stack-prometheus-node-exporter
+

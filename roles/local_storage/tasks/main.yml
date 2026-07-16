@@ -1,0 +1,178 @@
+---
+  - name: Create local storage root directory
+    ansible.builtin.file:
+      path: "{{ local_path_storage_root }}"
+      state: directory
+      owner: root
+      group: root
+      mode: '0755'
+
+  - name: Install local-path provisioner manifest
+    ansible.builtin.command: >
+      kubectl apply -f {{ local_path_provisioner_manifest_url }}
+    register: local_path_manifest_apply
+    changed_when: >
+      'created' in local_path_manifest_apply.stdout or
+      'configured' in local_path_manifest_apply.stdout
+
+  - name: Wait for local-path namespace
+    ansible.builtin.command: >
+      kubectl get namespace {{ local_path_namespace }}
+    register: local_path_namespace_check
+    changed_when: false
+    retries: 12
+    delay: 5
+    until: local_path_namespace_check.rc == 0
+
+  - name: Write managed local-path ConfigMap manifest
+    ansible.builtin.copy:
+      dest: /tmp/local-path-config.yml
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: local-path-config
+          namespace: {{ local_path_namespace }}
+        data:
+          config.json: |-
+            {
+              "nodePathMap":[
+                {
+                  "node":"DEFAULT_PATH_FOR_NON_LISTED_NODES",
+                  "paths":["{{ local_path_storage_root }}"]
+                }
+              ]
+            }
+          setup: |-
+            #!/bin/sh
+            set -eu
+            mkdir -m 0777 -p "$VOL_DIR"
+          teardown: |-
+            #!/bin/sh
+            set -eu
+            rm -rf "$VOL_DIR"
+          helperPod.yaml: |-
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: helper-pod
+            spec:
+              priorityClassName: system-node-critical
+              tolerations:
+                - key: node.kubernetes.io/disk-pressure
+                  operator: Exists
+                  effect: NoSchedule
+              containers:
+                - name: helper-pod
+                  image: busybox
+                  imagePullPolicy: IfNotPresent
+
+  - name: Apply managed local-path ConfigMap
+    ansible.builtin.command: kubectl apply -f /tmp/local-path-config.yml
+    register: local_path_config_apply
+    changed_when: >
+      'created' in local_path_config_apply.stdout or
+      'configured' in local_path_config_apply.stdout
+
+  - name: Restart local-path provisioner when ConfigMap changes
+    ansible.builtin.command: >
+      kubectl -n {{ local_path_namespace }}
+      rollout restart deployment/{{ local_path_deployment_name }}
+    when: local_path_config_apply.changed
+    register: local_path_restart
+    changed_when: "'restarted' in local_path_restart.stdout"
+
+  - name: Wait for local-path provisioner rollout
+    ansible.builtin.command: >
+      kubectl -n {{ local_path_namespace }}
+      rollout status deployment/{{ local_path_deployment_name }} --timeout=300s
+    register: local_path_rollout
+    changed_when: false
+
+  - name: Wait for local-path StorageClass
+    ansible.builtin.command: >
+      kubectl get storageclass.storage.k8s.io {{ local_path_storage_class }}
+    register: local_path_storage_class_check
+    changed_when: false
+    retries: 12
+    delay: 5
+    until: local_path_storage_class_check.rc == 0
+
+  - name: Find default StorageClasses
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - get
+        - storageclass
+        - -o
+        - "jsonpath={range .items[?(@.metadata.annotations.storageclass\\.kubernetes\\.io/is-default-class==\"true\")]}{.metadata.name}{\"\\n\"}{end}"
+    register: default_storage_classes_result
+    changed_when: false
+    when: local_path_make_default | bool
+
+  - name: Set default StorageClass list
+    ansible.builtin.set_fact:
+      default_storage_classes: "{{ default_storage_classes_result.stdout_lines | default([]) }}"
+    when: local_path_make_default | bool
+
+  - name: Remove default annotation from other StorageClasses
+    ansible.builtin.command: >
+      kubectl annotate storageclass {{ item }}
+      storageclass.kubernetes.io/is-default-class-
+      --overwrite
+    loop: "{{ default_storage_classes | default([]) | difference([local_path_storage_class]) }}"
+    when: local_path_make_default | bool
+    register: remove_default_storageclass_annotations
+    changed_when: "'annotated' in remove_default_storageclass_annotations.stdout"
+
+  - name: Check whether local-path StorageClass is default
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - get
+        - storageclass
+        - "{{ local_path_storage_class }}"
+        - -o
+        - "jsonpath={.metadata.annotations.storageclass\\.kubernetes\\.io/is-default-class}"
+    register: local_path_default_annotation_before
+    changed_when: false
+    failed_when: false
+    when: local_path_make_default | bool
+
+  - name: Mark local-path StorageClass as default
+    ansible.builtin.command: >
+      kubectl annotate storageclass {{ local_path_storage_class }}
+      storageclass.kubernetes.io/is-default-class=true
+      --overwrite
+    when:
+      - local_path_make_default | bool
+      - local_path_default_annotation_before.stdout | default("") != "true"
+    register: local_path_default_annotation
+    changed_when: "'annotated' in local_path_default_annotation.stdout"
+
+  - name: Show local-path provisioner pods
+    ansible.builtin.command: >
+      kubectl -n {{ local_path_namespace }} get pods -o wide
+    register: local_path_pods
+    changed_when: false
+
+  - name: Show StorageClasses
+    ansible.builtin.command: kubectl get storageclass -o wide
+    register: storage_classes
+    changed_when: false
+
+  - name: Show local-path config
+    ansible.builtin.command: >
+      kubectl -n {{ local_path_namespace }} get configmap local-path-config -o yaml
+    register: local_path_config
+    changed_when: false
+
+  - name: Print local storage status
+    ansible.builtin.debug:
+      msg:
+        - "{{ local_path_pods.stdout_lines }}"
+        - "{{ storage_classes.stdout_lines }}"
+        - "{{ local_path_config.stdout_lines }}"

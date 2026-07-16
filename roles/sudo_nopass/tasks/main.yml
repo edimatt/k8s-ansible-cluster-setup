@@ -1,0 +1,92 @@
+---
+  - name: Skip sudo bootstrap in check mode
+    ansible.builtin.meta: end_play
+    when: ansible_check_mode
+
+  - name: Detect SSH login user
+    ansible.builtin.command: whoami
+    register: sudo_nopass_user_check
+    changed_when: false
+
+  - name: Check if passwordless sudo is already configured
+    ansible.builtin.command: sudo -n true
+    register: sudo_nopass_check
+    changed_when: false
+    failed_when: false
+
+  - name: Determine whether any host still needs sudo bootstrap
+    ansible.builtin.set_fact:
+      sudo_bootstrap_required: >-
+        {{
+          ansible_play_hosts_all
+          | map('extract', hostvars, 'sudo_nopass_check')
+          | selectattr('rc', 'ne', 0)
+          | list
+          | length > 0
+        }}
+    run_once: true
+    delegate_to: localhost
+    delegate_facts: true
+
+  - name: Prompt for sudo password when passwordless sudo is missing
+    ansible.builtin.pause:
+      prompt: BECOME password
+      echo: false
+    register: sudo_bootstrap_password_prompt
+    run_once: true
+    delegate_to: localhost
+    when:
+      - hostvars.localhost.sudo_bootstrap_required | default(false)
+      - sudo_bootstrap_password is not defined
+
+  - name: Persist prompted sudo password on localhost
+    ansible.builtin.set_fact:
+      sudo_bootstrap_password_shared: "{{ sudo_bootstrap_password_prompt.user_input }}"
+    run_once: true
+    delegate_to: localhost
+    delegate_facts: true
+    no_log: true
+    when:
+      - hostvars.localhost.sudo_bootstrap_required | default(false)
+      - sudo_bootstrap_password is not defined
+      - sudo_bootstrap_password_prompt is defined
+
+  - name: Set sudo bootstrap password from prompt
+    ansible.builtin.set_fact:
+      sudo_bootstrap_password: "{{ hostvars.localhost.sudo_bootstrap_password_shared }}"
+    no_log: true
+    when:
+      - sudo_nopass_check.rc != 0
+      - sudo_bootstrap_password is not defined
+      - hostvars.localhost.sudo_bootstrap_password_shared is defined
+
+  - name: Require sudo password for initial sudo bootstrap
+    ansible.builtin.assert:
+      that:
+        - sudo_bootstrap_password is defined
+        - sudo_bootstrap_password | length > 0
+      fail_msg: "Provide a sudo password for the initial sudo bootstrap."
+    when: sudo_nopass_check.rc != 0
+
+  - name: Configure passwordless sudo
+    ansible.builtin.shell: |
+      set -eu
+      sudo_user={{ sudo_nopass_user_check.stdout | trim | quote }}
+      tmp_file="$(mktemp)"
+      trap 'rm -f "$tmp_file"' EXIT
+      printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$sudo_user" > "$tmp_file"
+      sudo -S -p '' sh -c '
+        set -eu
+        /usr/sbin/visudo -cf "$1"
+        install -o root -g root -m 0440 "$1" "$2"
+      ' sh "$tmp_file" "/etc/sudoers.d/$sudo_user"
+    args:
+      executable: /bin/bash
+      stdin: "{{ sudo_bootstrap_password }}"
+    environment:
+      SUDO_ASKPASS: ""
+    vars:
+      ansible_shell_executable: /bin/bash
+    changed_when: true
+    no_log: true
+    when: sudo_nopass_check.rc != 0

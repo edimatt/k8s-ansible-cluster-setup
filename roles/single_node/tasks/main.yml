@@ -1,0 +1,10 @@
+---
+  - name: Remove control-plane taint to allow workload scheduling
+    ansible.builtin.command: >
+      kubectl taint nodes {{ node_name }}
+      node-role.kubernetes.io/control-plane:NoSchedule-
+    register: remove_control_plane_taint
+    changed_when: "'untainted' in remove_control_plane_taint.stdout"
+    failed_when:
+      - remove_control_plane_taint.rc != 0
+      - "'not found' not in remove_control_plane_taint.stderr"

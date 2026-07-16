@@ -1,0 +1,4 @@
+---
+kubeconfig_path: /etc/kubernetes/admin.conf
+node_name: k8s-control-01
+

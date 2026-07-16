@@ -1,0 +1,30 @@
+---
+  - name: Download Helm archive
+    ansible.builtin.get_url:
+      url: "{{ helm_download_url }}"
+      dest: "/tmp/{{ helm_archive }}"
+      mode: '0644'
+
+  - name: Extract Helm archive
+    ansible.builtin.unarchive:
+      src: "/tmp/{{ helm_archive }}"
+      dest: /tmp
+      remote_src: true
+
+  - name: Install Helm binary
+    ansible.builtin.copy:
+      src: "/tmp/{{ helm_os }}-{{ helm_arch }}/helm"
+      dest: /usr/local/bin/helm
+      owner: root
+      group: root
+      mode: '0755'
+      remote_src: true
+
+  - name: Check Helm version
+    ansible.builtin.command: helm version --short
+    register: helm_version_check
+    changed_when: false
+
+  - name: Show Helm version
+    ansible.builtin.debug:
+      var: helm_version_check.stdout

@@ -10,7 +10,7 @@ It is a small, reproducible Kubernetes lab that demonstrates infrastructure
 automation, cluster bootstrapping, and the deployment of common Kubernetes
 platform services.
 
-Run the playbooks from this directory. The inventory is configured in
+Run the main playbook from this directory. The inventory is configured in
 `ansible.cfg` and points to `inventory/hosts.ini`.
 
 Run the full bootstrap:
@@ -19,21 +19,21 @@ Run the full bootstrap:
 ./bootstrap.sh
 ```
 
-The first playbook is `00-sudo-nopass.yml`. It checks whether passwordless sudo
-already works. If not, it prompts for the sudo password, creates
+The first role is `sudo_nopass`. It checks whether passwordless sudo already
+works. If not, it prompts for the sudo password, creates
 `/etc/sudoers.d/<ssh-user>`, validates it with `visudo`, and then the bootstrap
 continues.
 
 After the first successful run, sudo passwordless is configured and future
 bootstraps should not prompt for sudo.
 
-To configure only passwordless sudo and stop there, run:
+To run only passwordless sudo, use its tag:
 
 ```bash
-ansible-playbook 00-sudo-nopass.yml
+ansible-playbook site.yaml --tags sudo
 ```
 
-This playbook prompts for the sudo password itself, without using Ansible
+This role prompts for the sudo password itself, without using Ansible
 `become`.
 
 ## Inventory
@@ -97,25 +97,19 @@ Limit the bootstrap to one inventory group or host:
 ./bootstrap.sh --limit k8s-worker-01
 ```
 
-Resume from a specific playbook:
-
-```bash
-./bootstrap.sh --from 09-cilium-platform.yml
-```
-
 Run Ansible check mode through the bootstrap sequence:
 
 ```bash
 ./bootstrap.sh --check
 ```
 
-`00-sudo-nopass.yml` is skipped in check mode because it bootstraps sudo with
+The `sudo_nopass` role ends early in check mode because it bootstraps sudo with
 raw commands.
 
-Run syntax checks through the bootstrap sequence:
+Run a syntax check:
 
 ```bash
-./bootstrap.sh --syntax-check
+ansible-playbook --syntax-check site.yaml
 ```
 
 `--limit` accepts any Ansible inventory host or group. Use `k8s_cluster` for the
@@ -131,20 +125,30 @@ CILIUM_LB_POOL_BLOCKS='[{"start":"192.168.1.100","stop":"192.168.1.109"}]' \
   ./bootstrap.sh
 ```
 
-The same value can be passed directly to the Cilium playbook with
+The same value can be passed directly to the main playbook with
 `-e/--extra-vars`. The pool must be reachable on the node LAN, and the
 interface used by the L2 announcement policy defaults to `enp0s1`; override
 `cilium_l2_interface_regex` if the nodes use another interface.
 
-With `--limit k8s_control_plane`, the bootstrap runs the control-plane flow and
-skips `05-worker-join.yml`.
+With `--limit k8s_control_plane`, only plays targeting the control plane run.
+With `--limit k8s_workers` or a worker hostname, the worker preparation and
+join roles run, while control-plane roles have no matching hosts.
 
-With `--limit k8s_workers` or `--limit k8s-worker-01`, the bootstrap runs only
-the worker preparation playbooks through `04-kubernetes-packages.yml`, then
-`05-worker-join.yml`, skips the control-plane platform playbooks, runs
-`17-kube-bench.yml` and `18-trivy.yml`, and stops there. It does not run
-`05-kubeadm-init.yml`, Cilium, Helm, ingress, or other control-plane-only
-platform playbooks on the worker.
+Optional monitoring and Pod Security Admission are disabled by default. Enable
+them explicitly:
+
+```bash
+ansible-playbook site.yaml -e enable_monitoring=true
+ansible-playbook site.yaml -e enable_pod_security_admission=true
+```
+
+Use tags to run a focused part of the site:
+
+```bash
+ansible-playbook site.yaml --tags cilium
+ansible-playbook site.yaml --tags security
+ansible-playbook site.yaml --skip-tags optional
+```
 
 Pass other extra arguments directly to `ansible-playbook`. Everything after `--`
 is forwarded unchanged:
@@ -163,12 +167,12 @@ limited to that host:
 ```
 
 The bootstrap prepares the vanilla Ubuntu node, installs Kubernetes packages,
-and `05-worker-join.yml` joins it to the existing control plane. The join command
+and the `kubeadm_worker` role joins it to the existing control plane. The join command
 is generated automatically on the first host in `k8s_control_plane`.
 
 ## Container Runtime
 
-`03-containerd.yml` installs containerd with systemd cgroups and configures
+The `containerd` role installs containerd with systemd cgroups and configures
 `crictl` to use the containerd socket. It installs `cri-tools` from APT when
 available; otherwise it downloads the pinned `crictl` `v1.35.0` archive for
 `amd64` or `arm64` from the upstream Kubernetes cri-tools release.
@@ -194,56 +198,31 @@ Reset when sudo on the target requires a password:
 ./reset-cluster.sh -K
 ```
 
-## Bootstrap Order
+## Roles and main playbook
 
-The two `05-*` playbooks are alternative node-role steps: `05-kubeadm-init.yml`
-runs on the control plane, while `05-worker-join.yml` runs on workers.
+`site.yaml` is the canonical entry point. It groups roles by lifecycle stage
+and target host group: node preparation, control-plane initialization, worker
+joining, platform services, and security tooling. Each role is under
+`roles/<role-name>/` with its tasks, defaults, and handlers.
 
-```bash
-ansible-playbook 00-sudo-nopass.yml
-ansible-playbook 00-preflight.yml
-ansible-playbook 01-os-prep.yml
-ansible-playbook 02-firewall.yml
-ansible-playbook 03-containerd.yml
-ansible-playbook 04-kubernetes-packages.yml
-ansible-playbook 05-kubeadm-init.yml
-ansible-playbook 05-worker-join.yml
-ansible-playbook 06-single-node.yml
-ansible-playbook 07-helm.yml
-ansible-playbook 08-cilium-cli.yml
-ansible-playbook 09-cilium-platform.yml \
-  -e '{"cilium_lb_pool_blocks":[{"start":"192.168.1.80","stop":"192.168.1.89"}]}'
-ansible-playbook 10-local-storage.yml
-ansible-playbook 11-metrics-server.yml
-ansible-playbook 12-validation.yml
-ansible-playbook 13-cert-manager.yml
-ansible-playbook 14-nginx-ingress-lab.yml
-# ansible-playbook 15-monitoring.yml
-# ansible-playbook 16-pod-security-admission.yml
-ansible-playbook 17-kube-bench.yml
-ansible-playbook 18-trivy.yml
-ansible-playbook 19-kyverno.yml
-ansible-playbook 20-falco.yml
-ansible-playbook 17-spark-operator.yml
-```
-
-The bootstrap script currently comments out `15-monitoring.yml` and
-`16-pod-security-admission.yml`; run either playbook explicitly when needed.
+The numbered playbooks were intentionally removed so there is one source of
+truth for orchestration. `bootstrap.sh` remains as a small convenience wrapper
+for the main playbook and the Cilium LoadBalancer environment variable.
 
 ## Ingress And Monitoring
 
-`14-nginx-ingress-lab.yml` installs the pinned ingress-nginx chart as a
+The `nginx_ingress` role installs the pinned ingress-nginx chart as a
 `LoadBalancer` Service by default. It waits for an external address from
 Cilium LoadBalancer IPAM/L2 and fails with a remediation message if no address
 is assigned. For a lab that does not provide LoadBalancer addresses, use:
 
 ```bash
-ansible-playbook 14-nginx-ingress-lab.yml \
+ansible-playbook site.yaml --tags ingress \
   -e nginx_ingress_service_type=NodePort
 ```
 
-The playbook cleans up stale pending Helm releases and retries failed Helm
-installations. `15-monitoring.yml` applies the same stale-release cleanup and
+The role cleans up stale pending Helm releases and retries failed Helm
+installations. The `monitoring` role applies the same stale-release cleanup and
 retry behavior, waits up to 20 minutes for the kube-prometheus-stack release,
 and gives Grafana startup, readiness, and liveness probes enough time for a
 slow lab node to initialize.
@@ -251,12 +230,12 @@ slow lab node to initialize.
 Run monitoring separately when required:
 
 ```bash
-ansible-playbook 15-monitoring.yml
+ansible-playbook site.yaml --tags monitoring -e enable_monitoring=true
 ```
 
 ## Kube-bench
 
-`17-kube-bench.yml` installs the pinned kube-bench Debian package on every host
+The `kube_bench` role installs the pinned kube-bench Debian package on every host
 in `k8s_cluster`. Run checks on each node with Ansible:
 
 ```bash
@@ -265,7 +244,7 @@ ansible k8s_cluster -b -a "kube-bench run"
 
 ## Trivy
 
-`18-trivy.yml` installs the Trivy CLI from the official Aqua Security APT
+The `trivy` role installs the Trivy CLI from the official Aqua Security APT
 repository on every host in `k8s_cluster`. Run a cluster scan from a
 control-plane node with:
 
@@ -275,7 +254,7 @@ sudo KUBECONFIG=/etc/kubernetes/admin.conf trivy k8s cluster --report summary
 
 ## Kyverno
 
-`19-kyverno.yml` installs Kyverno with the official Helm chart on the control
+The `kyverno` role installs Kyverno with the official Helm chart on the control
 plane and adds CKS lab policies: one policy audits Pods against the latest
 restricted Pod Security Standards, and one simple enforce policy blocks
 privileged containers outside system namespaces.
@@ -290,7 +269,7 @@ kubectl get policyreports -A
 
 ## Falco
 
-`20-falco.yml` installs Falco with the official Falco Security Helm chart on the
+The `falco` role installs Falco with the official Falco Security Helm chart on the
 control plane. The chart deploys Falco as a DaemonSet so runtime detection runs
 on every node, which fits CKS practice for behavioral detection and incident
 response.
@@ -304,7 +283,7 @@ kubectl -n falco logs -l app.kubernetes.io/name=falco -c falco --tail=50
 
 ## Firewall
 
-`02-firewall.yml` configures UFW for this Kubernetes lab. It allows SSH, common
+The `firewall` role configures UFW for this Kubernetes lab. It allows SSH, common
 node ports, NodePort TCP/UDP, Cilium VXLAN, Cilium health/Hubble server,
 ingress/Gateway HTTP and HTTPS, and node-exporter. Control plane ports are only
 opened on `k8s_control_plane` hosts. Incoming traffic is denied by default;
@@ -317,43 +296,43 @@ The control-plane-only firewall ports are `6443`, `2379-2380`, `10257`, and
 
 ## Pod Security Admission
 
-`16-pod-security-admission.yml` configures the built-in Kubernetes Pod Security
+The `pod_security_admission` role configures the built-in Kubernetes Pod Security
 Admission controller through the kube-apiserver static pod. Cluster defaults are
 kept permissive with `enforce=privileged`, while `audit` and `warn` use the
 `restricted` profile so violations are visible without breaking existing lab
 workloads.
 
-The playbook does not create permanent test namespaces.
+The role does not create permanent test namespaces.
 
 ## Common Commands
 
-Re-run a single playbook:
+Run a single role by tag:
 
 ```bash
-ansible-playbook <playbook>.yml
+ansible-playbook site.yaml --tags ingress
 ```
 
 Re-run Cilium platform networking:
 
 ```bash
-ansible-playbook 09-cilium-platform.yml \
+ansible-playbook site.yaml --tags cilium \
   -e '{"cilium_lb_pool_blocks":[{"start":"192.168.1.80","stop":"192.168.1.89"}]}'
 ```
 
 Syntax check:
 
 ```bash
-ansible-playbook --syntax-check <playbook>.yml
+ansible-playbook --syntax-check site.yaml
 ```
 
 ## CKS / Security Layer Roadmap
 
 ```text
-16-pod-security-admission.yml
-17-kube-bench.yml
-18-trivy.yml
-19-kyverno.yml
-20-falco.yml
+roles/pod_security_admission
+roles/kube_bench
+roles/trivy
+roles/kyverno
+roles/falco
 21-audit-logging.yml
 22-etcd-encryption.yml
 23-seccomp-profiles.yml

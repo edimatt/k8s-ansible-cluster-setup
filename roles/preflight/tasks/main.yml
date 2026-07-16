@@ -1,0 +1,60 @@
+---
+  - name: Show OS
+    ansible.builtin.debug:
+      msg:
+        - "Host: {{ inventory_hostname }}"
+        - "Distribution: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"
+        - "Kernel: {{ ansible_facts['kernel'] }}"
+        - "Architecture: {{ ansible_facts['architecture'] }}"
+        - "CPU cores: {{ ansible_facts['processor_vcpus'] }}"
+        - "Memory MB: {{ ansible_facts['memtotal_mb'] }}"
+
+  - name: Check swap status
+    ansible.builtin.command: swapon --show
+    register: swap_status
+    changed_when: false
+
+  - name: Show swap status
+    ansible.builtin.debug:
+      msg: "{{ swap_status.stdout | default('') | ternary(swap_status.stdout, 'No active swap') }}"
+
+  - name: Check primary IP addresses
+    ansible.builtin.command: ip -br addr
+    register: ip_addr
+    changed_when: false
+
+  - name: Show IP addresses
+    ansible.builtin.debug:
+      var: ip_addr.stdout_lines
+
+  - name: Check default route
+    ansible.builtin.command: ip route
+    register: ip_route
+    changed_when: false
+
+  - name: Show routes
+    ansible.builtin.debug:
+      var: ip_route.stdout_lines
+
+  - name: Check required kernel modules currently loaded
+    ansible.builtin.shell: |
+      set -o pipefail
+      lsmod | egrep 'br_netfilter|overlay' || true
+    args:
+      executable: /bin/bash
+    register: kernel_modules
+    changed_when: false
+
+  - name: Show loaded kernel modules
+    ansible.builtin.debug:
+      msg: "{{ kernel_modules.stdout | default('') | ternary(kernel_modules.stdout, 'br_netfilter/overlay not loaded yet') }}"
+
+  - name: Check relevant sysctl values
+    ansible.builtin.command: sysctl net.bridge.bridge-nf-call-iptables net.ipv4.ip_forward
+    register: sysctl_values
+    changed_when: false
+    failed_when: false
+
+  - name: Show sysctl values
+    ansible.builtin.debug:
+      var: sysctl_values.stdout_lines

@@ -1,0 +1,12 @@
+---
+kubeconfig_path: /etc/kubernetes/admin.conf
+
+local_path_provisioner_version: v0.0.35
+local_path_provisioner_manifest_url: "https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ local_path_provisioner_version }}/deploy/local-path-storage.yaml"
+
+local_path_namespace: local-path-storage
+local_path_deployment_name: local-path-provisioner
+local_path_storage_class: local-path
+local_path_storage_root: /opt/local-path-provisioner
+local_path_make_default: true
+

@@ -1,0 +1,101 @@
+---
+# Main entry point for the Kubernetes lab.
+#
+# The roles are deliberately grouped into plays by the hosts they affect. This
+# keeps the control-plane/worker lifecycle explicit while allowing Ansible's
+# inventory targeting, tags, check mode, and extra vars to do the filtering.
+
+- name: Bootstrap Kubernetes nodes
+  hosts: k8s_cluster
+  roles:
+    - role: sudo_nopass
+      become: false
+      tags: [bootstrap, sudo]
+    - role: preflight
+      tags: [bootstrap, preflight]
+    - role: os_prep
+      tags: [bootstrap, os_prep]
+    - role: firewall
+      tags: [bootstrap, firewall]
+    - role: containerd
+      tags: [bootstrap, containerd]
+    - role: kubernetes_packages
+      tags: [bootstrap, kubernetes]
+
+- name: Initialize Kubernetes control plane
+  hosts: k8s_control_plane
+  roles:
+    - role: kubeadm_control_plane
+      tags: [bootstrap, kubeadm, control_plane]
+
+- name: Join Kubernetes workers
+  hosts: k8s_workers
+  roles:
+    - role: kubeadm_worker
+      tags: [bootstrap, kubeadm, workers]
+
+- name: Configure the Kubernetes platform
+  hosts: k8s_control_plane
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+    NO_COLOR: "1"
+  roles:
+    - role: single_node
+      tags: [platform, single_node]
+    - role: helm
+      tags: [platform, helm]
+    - role: cilium_cli
+      tags: [platform, cilium]
+    - role: cilium_platform
+      tags: [platform, cilium]
+    - role: local_storage
+      tags: [platform, storage]
+    - role: metrics_server
+      tags: [platform, metrics]
+    - role: validation
+      tags: [platform, validation]
+    - role: cert_manager
+      tags: [platform, cert_manager]
+    - role: nginx_ingress
+      tags: [platform, ingress]
+
+- name: Install node security tooling
+  hosts: k8s_cluster
+  roles:
+    - role: kube_bench
+      tags: [security, kube_bench]
+    - role: trivy
+      tags: [security, trivy]
+
+- name: Install control-plane security controls
+  hosts: k8s_control_plane
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+    NO_COLOR: "1"
+  roles:
+    - role: pod_security_admission
+      when: enable_pod_security_admission | bool
+      tags: [security, psa]
+    - role: kyverno
+      tags: [security, kyverno]
+    - role: falco
+      tags: [security, falco]
+
+- name: Install optional platform operators
+  hosts: k8s_control_plane
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+    NO_COLOR: "1"
+  roles:
+    - role: spark_operator
+      tags: [optional, spark]
+
+- name: Install optional monitoring
+  hosts: k8s_control_plane
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+    NO_COLOR: "1"
+  roles:
+    - role: monitoring
+      when: enable_monitoring | bool
+      tags: [optional, monitoring]

@@ -1,0 +1,32 @@
+---
+kubeconfig_path: /etc/kubernetes/admin.conf
+node_name: k8s-control-01
+
+# Gateway API
+gateway_api_version: v1.4.1
+gateway_api_standard_bundle_url: "https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ gateway_api_version }}/standard-install.yaml"
+cilium_gateway_class_name: cilium
+
+# Cilium core
+cilium_k8s_service_host: "{{ ansible_facts['default_ipv4']['address'] }}"
+cilium_k8s_service_port: "6443"
+cilium_k8s_client_qps: 10
+cilium_k8s_client_burst: 20
+cilium_operator_replicas: 1
+
+# LoadBalancer / L2 announcements
+cilium_lb_pool_name: lan-pool
+cilium_lb_allow_first_last_ips: "No"
+cilium_lb_pool_blocks:
+  - start: 192.168.1.80
+    stop: 192.168.1.89
+
+cilium_l2_policy_name: lan-l2-announcement
+cilium_l2_interface_regex: "^enp0s1$"
+cilium_l2_announce_external_ips: false
+cilium_l2_announce_loadbalancer_ips: true
+
+# Hubble CLI
+hubble_cli_install_dir: /usr/local/bin
+hubble_cli_arch: "{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'amd64' }}"
+

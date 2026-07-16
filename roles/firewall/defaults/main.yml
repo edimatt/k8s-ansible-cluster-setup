@@ -1,0 +1,52 @@
+---
+firewall_ssh_ports:
+  - "22"
+
+firewall_common_tcp_rules:
+  # Kubernetes node components and Services exposed from lab manifests.
+  - { port: "10250", comment: "Kubelet API" }
+  - { port: "30000:32767", comment: "Kubernetes NodePort Services" }
+
+  # Cilium LoadBalancer/Gateway and ingress traffic can land on any node in a multi-node cluster.
+  - { port: "80", comment: "HTTP ingress and Gateway API listeners" }
+  - { port: "443", comment: "HTTPS ingress and Gateway API listeners" }
+
+  # Cilium inter-node health and Hubble agent server.
+  - { port: "4240", comment: "Cilium health checks" }
+  - { port: "4244", comment: "Hubble server" }
+
+  # kube-prometheus-stack node exporter runs on each node.
+  - { port: "9100", comment: "Prometheus node-exporter" }
+
+firewall_control_plane_tcp_rules:
+  # Kubernetes control plane components.
+  - { port: "6443", comment: "Kubernetes API server" }
+  - { port: "2379:2380", comment: "etcd client and peer traffic" }
+  - { port: "10257", comment: "kube-controller-manager" }
+  - { port: "10259", comment: "kube-scheduler" }
+
+firewall_common_udp_rules:
+  # Cilium defaults to VXLAN tunneling unless native routing or another tunnel is configured.
+  - { port: "8472", comment: "Cilium VXLAN overlay" }
+  - { port: "30000:32767", comment: "Kubernetes NodePort Services" }
+
+firewall_removed_tcp_rules:
+  - "10256"
+  - "4245"
+  - "4250"
+  - "8443"
+  - "9962"
+  - "9963"
+  - "9964"
+
+firewall_removed_udp_rules:
+  - "6081"
+
+firewall_icmp_rules_v4:
+  - "-A ufw-before-input -p icmp --icmp-type echo-request -j ACCEPT"
+  - "-A ufw-before-input -p icmp --icmp-type echo-reply -j ACCEPT"
+
+firewall_icmp_rules_v6:
+  - "-A ufw6-before-input -p icmpv6 --icmpv6-type echo-request -j ACCEPT"
+  - "-A ufw6-before-input -p icmpv6 --icmpv6-type echo-reply -j ACCEPT"
+

@@ -1,0 +1,12 @@
+---
+cri_tools_version: "v1.35.0"
+cri_tools_arch_map:
+  x86_64: amd64
+  aarch64: arm64
+  arm64: arm64
+cri_tools_arch: "{{ cri_tools_arch_map.get(ansible_facts['architecture'], '') }}"
+cri_tools_install_dir: /usr/local/bin
+cri_tools_archive_name: "crictl-{{ cri_tools_version }}-linux-{{ cri_tools_arch }}.tar.gz"
+cri_tools_archive_path: "/tmp/{{ cri_tools_archive_name }}"
+cri_tools_download_url: "https://github.com/kubernetes-sigs/cri-tools/releases/download/{{ cri_tools_version }}/{{ cri_tools_archive_name }}"
+

@@ -1,0 +1,239 @@
+---
+  - name: Add Kyverno Helm repository
+    ansible.builtin.command:
+      argv:
+        - helm
+        - repo
+        - add
+        - --force-update
+        - "{{ kyverno_chart_repo_name }}"
+        - "{{ kyverno_chart_repo_url }}"
+    register: kyverno_repo_add
+    changed_when: >
+      'has been added' in kyverno_repo_add.stdout or
+      'has been updated' in kyverno_repo_add.stdout
+    when: not ansible_check_mode
+
+  - name: Update Helm repositories
+    ansible.builtin.command:
+      argv:
+        - helm
+        - repo
+        - update
+    changed_when: false
+    when: not ansible_check_mode
+
+  - name: Build Helm install command without chart version
+    ansible.builtin.set_fact:
+      kyverno_helm_upgrade_argv:
+        - helm
+        - upgrade
+        - --install
+        - "{{ kyverno_release_name }}"
+        - "{{ kyverno_chart_ref }}"
+        - --namespace
+        - "{{ kyverno_namespace }}"
+        - --create-namespace
+        - --wait
+        - --wait-for-jobs
+        - --timeout
+        - 10m
+    when: kyverno_chart_version | string | trim | length == 0
+
+  - name: Build Helm install command with chart version
+    ansible.builtin.set_fact:
+      kyverno_helm_upgrade_argv:
+        - helm
+        - upgrade
+        - --install
+        - "{{ kyverno_release_name }}"
+        - "{{ kyverno_chart_ref }}"
+        - --namespace
+        - "{{ kyverno_namespace }}"
+        - --create-namespace
+        - --version
+        - "{{ kyverno_chart_version }}"
+        - --wait
+        - --wait-for-jobs
+        - --timeout
+        - 10m
+    when: kyverno_chart_version | string | trim | length > 0
+
+  - name: Install or upgrade Kyverno with Helm
+    ansible.builtin.command:
+      argv: "{{ kyverno_helm_upgrade_argv }}"
+    register: kyverno_helm_install
+    changed_when: >
+      'has been upgraded' in kyverno_helm_install.stdout or
+      'has been installed' in kyverno_helm_install.stdout or
+      'Installing it now' in kyverno_helm_install.stdout
+    when: not ansible_check_mode
+
+  - name: Wait for Kyverno deployments to become available
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - -n
+        - "{{ kyverno_namespace }}"
+        - wait
+        - "--for=condition=Available"
+        - deployment
+        - --all
+        - "--timeout=300s"
+    register: kyverno_deployments_ready
+    changed_when: false
+    when: not ansible_check_mode
+
+  - name: Write CKS lab Kyverno policies
+    ansible.builtin.copy:
+      dest: "{{ kyverno_lab_policies_path }}"
+      owner: root
+      group: root
+      mode: '0600'
+      content: |
+        apiVersion: kyverno.io/v1
+        kind: ClusterPolicy
+        metadata:
+          name: cks-restricted-pod-security-audit
+          annotations:
+            policies.kyverno.io/title: Restricted Pod Security Standards Audit
+            policies.kyverno.io/category: Pod Security Standards
+            policies.kyverno.io/severity: medium
+            policies.kyverno.io/subject: Pod
+            policies.kyverno.io/description: >-
+              Audit Pods against the latest restricted Pod Security Standards.
+              This is intentionally non-blocking for CKS lab practice.
+        spec:
+          background: true
+          rules:
+            - name: restricted-pod-security
+              match:
+                any:
+                  - resources:
+                      kinds:
+                        - Pod
+              exclude:
+                any:
+                  - resources:
+                      namespaces:
+                        - kube-system
+                        - kyverno
+                        - falco
+              validate:
+                failureAction: Audit
+                podSecurity:
+                  level: restricted
+                  version: latest
+        ---
+        apiVersion: kyverno.io/v1
+        kind: ClusterPolicy
+        metadata:
+          name: cks-disallow-privileged-containers
+          annotations:
+            policies.kyverno.io/title: Disallow Privileged Containers
+            policies.kyverno.io/category: Pod Security Standards
+            policies.kyverno.io/severity: high
+            policies.kyverno.io/subject: Pod
+            policies.kyverno.io/description: >-
+              Block Pods that set privileged=true on regular, init, or
+              ephemeral containers.
+        spec:
+          validationFailureAction: Enforce
+          background: true
+          rules:
+            - name: privileged-containers
+              match:
+                any:
+                  - resources:
+                      kinds:
+                        - Pod
+              exclude:
+                any:
+                  - resources:
+                      namespaces:
+                        - kube-system
+                        - kyverno
+                        - falco
+              validate:
+                message: "Privileged containers are not allowed."
+                pattern:
+                  spec:
+                    =(ephemeralContainers):
+                      - =(securityContext):
+                          =(privileged): "false"
+                    =(initContainers):
+                      - =(securityContext):
+                          =(privileged): "false"
+                    containers:
+                      - =(securityContext):
+                          =(privileged): "false"
+    when:
+      - kyverno_install_lab_policies | bool
+      - not ansible_check_mode
+
+  - name: Apply CKS lab Kyverno policies
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - apply
+        - -f
+        - "{{ kyverno_lab_policies_path }}"
+    register: kyverno_lab_policies_apply
+    changed_when: >
+      'created' in kyverno_lab_policies_apply.stdout or
+      'configured' in kyverno_lab_policies_apply.stdout
+    when:
+      - kyverno_install_lab_policies | bool
+      - not ansible_check_mode
+
+  - name: Show Helm release
+    ansible.builtin.command:
+      argv:
+        - helm
+        - status
+        - "{{ kyverno_release_name }}"
+        - -n
+        - "{{ kyverno_namespace }}"
+    register: kyverno_helm_status
+    changed_when: false
+    when: not ansible_check_mode
+
+  - name: Show Kyverno pods
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - -n
+        - "{{ kyverno_namespace }}"
+        - get
+        - pods
+        - -o
+        - wide
+    register: kyverno_pods
+    changed_when: false
+    when: not ansible_check_mode
+
+  - name: Show Kyverno policies
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - get
+        - clusterpolicies.kyverno.io
+    register: kyverno_policies
+    changed_when: false
+    when: not ansible_check_mode
+
+  - name: Report Kyverno check mode action
+    ansible.builtin.debug:
+      msg: "Kyverno would be installed with Helm on {{ inventory_hostname }}"
+    changed_when: true
+    when: ansible_check_mode
+
+  - name: Print Kyverno status
+    ansible.builtin.debug:
+      msg:
+        - "{{ kyverno_helm_status.stdout_lines }}"
+        - "{{ kyverno_pods.stdout_lines }}"
+        - "{{ kyverno_policies.stdout_lines }}"
+    when:
+      - kyverno_helm_status is defined
+      - kyverno_helm_status is not skipped
