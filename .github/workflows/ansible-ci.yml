@@ -1,0 +1,108 @@
+---
+name: Ansible CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**/*.yml"
+      - "**/*.yaml"
+      - "**/*.ini"
+      - "**/*.cfg"
+      - "**/*.sh"
+      - "roles/**"
+      - "inventory/**"
+      - "group_vars/**"
+      - ".github/workflows/ansible-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "**/*.yml"
+      - "**/*.yaml"
+      - "**/*.ini"
+      - "**/*.cfg"
+      - "**/*.sh"
+      - "roles/**"
+      - "inventory/**"
+      - "group_vars/**"
+      - ".github/workflows/ansible-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ansible-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install validation tools
+        run: |
+          python -m pip install \
+            ansible-core==2.20.5 \
+            ansible-lint==26.6.0 \
+            yamllint==1.38.0
+          ansible-galaxy collection install community.general:11.4.0
+
+      - name: Lint top-level Ansible files
+        run: |
+          yamllint \
+            --config-data '{extends: default, rules: {line-length: {max: 200}, truthy: {check-keys: false}}}' \
+            site.yaml reset-cluster.yml group_vars/all.yml .github/workflows/ansible-ci.yml
+          ansible-lint --exclude roles site.yaml reset-cluster.yml
+
+      - name: Validate inventory and playbooks
+        run: |
+          ansible-inventory --graph
+          ansible-playbook site.yaml --syntax-check
+          ansible-playbook reset-cluster.yml --syntax-check
+
+      - name: Lint shell scripts
+        run: shellcheck bootstrap.sh reset-cluster.sh
+
+  ubuntu-smoke:
+    name: Ubuntu preflight smoke test
+    if: github.event_name == 'workflow_dispatch'
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible
+        run: python -m pip install ansible-core==2.20.5
+
+      - name: Run preflight role on localhost
+        env:
+          ANSIBLE_ROLES_PATH: ${{ github.workspace }}/roles
+        run: |
+          mkdir -p "${RUNNER_TEMP}/ansible-ci"
+          printf '%s\n' \
+            '[ci_hosts]' \
+            'localhost ansible_connection=local' \
+            > "${RUNNER_TEMP}/ansible-ci/localhost.ini"
+          printf '%s\n' \
+            '---' \
+            '- name: Run safe preflight smoke test' \
+            '  hosts: ci_hosts' \
+            '  become: true' \
+            '  gather_facts: true' \
+            '  roles:' \
+            '    - role: preflight' \
+            > "${RUNNER_TEMP}/ansible-ci/preflight-smoke.yml"
+          ansible-playbook \
+            -i "${RUNNER_TEMP}/ansible-ci/localhost.ini" \
+            "${RUNNER_TEMP}/ansible-ci/preflight-smoke.yml"
