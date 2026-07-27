@@ -1,6 +1,6 @@
 ---
 kubeconfig_path: /etc/kubernetes/admin.conf
-node_name: k8s-control-01
+node_name: "{{ ansible_facts['hostname'] }}"
 
 # Gateway API
 gateway_api_version: v1.4.1
@@ -22,11 +22,10 @@ cilium_lb_pool_blocks:
     stop: 192.168.1.89
 
 cilium_l2_policy_name: lan-l2-announcement
-cilium_l2_interface_regex: "^enp0s1$"
+cilium_l2_interface_regex: "^enp1s0$"
 cilium_l2_announce_external_ips: false
 cilium_l2_announce_loadbalancer_ips: true
 
 # Hubble CLI
 hubble_cli_install_dir: /usr/local/bin
 hubble_cli_arch: "{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'amd64' }}"
-

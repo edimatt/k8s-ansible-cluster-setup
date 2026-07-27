@@ -11,6 +11,55 @@
         - containerd
       state: present
       update_cache: true
+    notify: Restart containerd
+
+  - name: Validate supported CPU architecture for nerdctl
+    ansible.builtin.assert:
+      that:
+        - nerdctl_arch | length > 0
+      fail_msg: "Unsupported nerdctl architecture: {{ ansible_facts['architecture'] }}"
+
+  - name: Check installed nerdctl version
+    ansible.builtin.command:
+      argv:
+        - nerdctl
+        - --version
+    register: nerdctl_version_check
+    changed_when: false
+    failed_when: false
+
+  - name: Download nerdctl archive
+    ansible.builtin.get_url:
+      url: "{{ nerdctl_download_url }}"
+      dest: "{{ nerdctl_archive_path }}"
+      owner: root
+      group: root
+      mode: '0644'
+    when:
+      - nerdctl_version_check.stdout | default('') is not search(nerdctl_version_number)
+      - not ansible_check_mode
+
+  - name: Extract nerdctl binary
+    ansible.builtin.unarchive:
+      src: "{{ nerdctl_archive_path }}"
+      dest: "{{ nerdctl_install_dir }}"
+      remote_src: true
+      include:
+        - nerdctl
+      owner: root
+      group: root
+      mode: '0755'
+    when:
+      - nerdctl_version_check.stdout | default('') is not search(nerdctl_version_number)
+      - not ansible_check_mode
+
+  - name: Report nerdctl installation in check mode
+    ansible.builtin.debug:
+      msg: "nerdctl {{ nerdctl_version }} would be installed from {{ nerdctl_download_url }}."
+    changed_when: true
+    when:
+      - nerdctl_version_check.stdout | default('') is not search(nerdctl_version_number)
+      - ansible_check_mode
 
   - name: Check whether cri-tools is available in apt
     ansible.builtin.command:
@@ -84,10 +133,16 @@
       group: root
       mode: '0755'
 
+  - name: Check whether containerd config already exists
+    ansible.builtin.stat:
+      path: /etc/containerd/config.toml
+    register: containerd_config_stat
+
   - name: Generate default containerd config
     ansible.builtin.command: containerd config default
     register: containerd_default_config
     changed_when: false
+    when: not containerd_config_stat.stat.exists
 
   - name: Write containerd config
     ansible.builtin.copy:
@@ -96,12 +151,15 @@
       group: root
       mode: '0644'
       content: "{{ containerd_default_config.stdout }}"
+    when: not containerd_config_stat.stat.exists
+    notify: Restart containerd
 
   - name: Enable SystemdCgroup in containerd config
     ansible.builtin.replace:
       path: /etc/containerd/config.toml
       regexp: 'SystemdCgroup = false'
       replace: 'SystemdCgroup = true'
+    notify: Restart containerd
 
   - name: Configure crictl for containerd
     ansible.builtin.copy:
@@ -115,11 +173,11 @@
         timeout: 10
         debug: false
 
-  - name: Enable and restart containerd
+  - name: Ensure containerd is enabled and running
     ansible.builtin.systemd:
       name: containerd
       enabled: true
-      state: restarted
+      state: started
 
   - name: Check containerd status
     ansible.builtin.command: systemctl is-active containerd
@@ -135,8 +193,18 @@
     changed_when: false
     when: not ansible_check_mode
 
+  - name: Check nerdctl version after installation
+    ansible.builtin.command:
+      argv:
+        - nerdctl
+        - --version
+    register: nerdctl_installed_version
+    changed_when: false
+    when: not ansible_check_mode
+
   - name: Show containerd status
     ansible.builtin.debug:
       msg:
         - "containerd: {{ containerd_status.stdout }}"
         - "crictl: {{ crictl_installed_version.stdout | default('not checked') }}"
+        - "nerdctl: {{ nerdctl_installed_version.stdout | default('not checked') }}"

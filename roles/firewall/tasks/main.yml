@@ -1,1 +1,109 @@
 ---
+  - name: Install UFW
+    ansible.builtin.apt:
+      name: ufw
+      state: present
+      update_cache: true
+
+  - name: Allow SSH before enabling firewall
+    community.general.ufw:
+      rule: allow
+      proto: tcp
+      port: "{{ item }}"
+      comment: "SSH"
+    loop: "{{ firewall_ssh_ports }}"
+
+  - name: Allow common Kubernetes and platform TCP ports
+    community.general.ufw:
+      rule: allow
+      proto: tcp
+      port: "{{ item.port }}"
+      comment: "{{ item.comment }}"
+    loop: "{{ firewall_common_tcp_rules }}"
+
+  - name: Allow control plane TCP ports
+    community.general.ufw:
+      rule: allow
+      proto: tcp
+      port: "{{ item.port }}"
+      comment: "{{ item.comment }}"
+    loop: "{{ firewall_control_plane_tcp_rules }}"
+    when: inventory_hostname in groups.get('k8s_control_plane', [])
+
+  - name: Allow common Kubernetes and platform UDP ports
+    community.general.ufw:
+      rule: allow
+      proto: udp
+      port: "{{ item.port }}"
+      comment: "{{ item.comment }}"
+    loop: "{{ firewall_common_udp_rules }}"
+
+  - name: Remove obsolete TCP firewall rules
+    community.general.ufw:
+      rule: allow
+      proto: tcp
+      port: "{{ item }}"
+      delete: true
+    loop: "{{ firewall_removed_tcp_rules }}"
+
+  - name: Remove obsolete UDP firewall rules
+    community.general.ufw:
+      rule: allow
+      proto: udp
+      port: "{{ item }}"
+      delete: true
+    loop: "{{ firewall_removed_udp_rules }}"
+
+  - name: Allow Cilium health ICMP for IPv4
+    ansible.builtin.blockinfile:
+      path: /etc/ufw/before.rules
+      marker: "# {mark} ANSIBLE MANAGED KUBERNETES ICMP"
+      insertbefore: "^COMMIT$"
+      block: "{{ firewall_icmp_rules_v4 | join('\n') }}"
+    notify: Reload ufw
+
+  - name: Allow Cilium health ICMP for IPv6
+    ansible.builtin.blockinfile:
+      path: /etc/ufw/before6.rules
+      marker: "# {mark} ANSIBLE MANAGED KUBERNETES ICMP"
+      insertbefore: "^COMMIT$"
+      block: "{{ firewall_icmp_rules_v6 | join('\n') }}"
+    notify: Reload ufw
+
+  - name: Allow routed traffic for Kubernetes pod and service networking
+    ansible.builtin.command: ufw default allow routed
+    register: ufw_default_routed
+    changed_when: "'Default routed policy changed' in ufw_default_routed.stdout"
+
+  - name: Allow packet forwarding in UFW default config
+    ansible.builtin.lineinfile:
+      path: /etc/default/ufw
+      regexp: '^DEFAULT_FORWARD_POLICY='
+      line: 'DEFAULT_FORWARD_POLICY="ACCEPT"'
+    notify: Reload ufw
+
+  - name: Set default incoming policy
+    community.general.ufw:
+      direction: incoming
+      policy: deny
+
+  - name: Set default outgoing policy
+    community.general.ufw:
+      direction: outgoing
+      policy: allow
+
+  - name: Enable UFW
+    community.general.ufw:
+      state: enabled
+
+  - name: Apply pending UFW reloads before status output
+    ansible.builtin.meta: flush_handlers
+
+  - name: Show firewall status
+    ansible.builtin.command: ufw status verbose
+    register: ufw_status
+    changed_when: false
+
+  - name: Print firewall status
+    ansible.builtin.debug:
+      var: ufw_status.stdout_lines
