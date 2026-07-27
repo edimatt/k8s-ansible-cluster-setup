@@ -1,3 +1,10 @@
 ---
 kubeconfig_path: /etc/kubernetes/admin.conf
 
+validation_cilium_lb_smoke_test_enabled: true
+validation_cilium_lb_smoke_test_namespace: cilium-lb-smoke-test
+validation_cilium_lb_smoke_test_image: registry.k8s.io/e2e-test-images/agnhost:2.53
+validation_cilium_lb_smoke_test_port: 8080
+validation_cilium_lb_smoke_test_retries: 30
+validation_cilium_lb_smoke_test_delay: 5
+validation_cilium_lb_smoke_test_cleanup: true

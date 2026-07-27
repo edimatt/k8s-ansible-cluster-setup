@@ -14,6 +14,149 @@
     register: cilium_status
     changed_when: false
 
+  - name: Validate Cilium LoadBalancer IPAM and L2 advertisement
+    when: validation_cilium_lb_smoke_test_enabled | bool
+    block:
+      - name: Write Cilium LoadBalancer smoke-test manifest
+        ansible.builtin.copy:
+          dest: /tmp/cilium-lb-smoke-test.yml
+          owner: root
+          group: root
+          mode: "0644"
+          content: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: {{ validation_cilium_lb_smoke_test_namespace }}
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: echo
+              namespace: {{ validation_cilium_lb_smoke_test_namespace }}
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: echo
+              template:
+                metadata:
+                  labels:
+                    app: echo
+                spec:
+                  containers:
+                    - name: echo
+                      image: {{ validation_cilium_lb_smoke_test_image }}
+                      args:
+                        - netexec
+                        - --http-port={{ validation_cilium_lb_smoke_test_port }}
+                      ports:
+                        - name: http
+                          containerPort: {{ validation_cilium_lb_smoke_test_port }}
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: echo
+              namespace: {{ validation_cilium_lb_smoke_test_namespace }}
+            spec:
+              type: LoadBalancer
+              selector:
+                app: echo
+              ports:
+                - name: http
+                  port: {{ validation_cilium_lb_smoke_test_port }}
+                  targetPort: http
+
+      - name: Apply Cilium LoadBalancer smoke-test resources
+        ansible.builtin.command:
+          argv:
+            - kubectl
+            - apply
+            - -f
+            - /tmp/cilium-lb-smoke-test.yml
+        register: validation_cilium_lb_smoke_test_apply
+        changed_when: >-
+          'created' in validation_cilium_lb_smoke_test_apply.stdout or
+          'configured' in validation_cilium_lb_smoke_test_apply.stdout
+
+      - name: Wait for Cilium LoadBalancer smoke-test deployment
+        ansible.builtin.command:
+          argv:
+            - kubectl
+            - --namespace
+            - "{{ validation_cilium_lb_smoke_test_namespace }}"
+            - rollout
+            - status
+            - deployment/echo
+            - --timeout=300s
+        changed_when: false
+
+      - name: Wait for Cilium to allocate a LoadBalancer IP
+        ansible.builtin.command:
+          argv:
+            - kubectl
+            - --namespace
+            - "{{ validation_cilium_lb_smoke_test_namespace }}"
+            - get
+            - service
+            - echo
+            - -o
+            - "jsonpath={.status.loadBalancer.ingress[0].ip}"
+        register: validation_cilium_lb_smoke_test_ip
+        changed_when: false
+        retries: "{{ validation_cilium_lb_smoke_test_retries }}"
+        delay: "{{ validation_cilium_lb_smoke_test_delay }}"
+        until: validation_cilium_lb_smoke_test_ip.stdout | trim | length > 0
+
+      - name: Require an IPv4 LoadBalancer address
+        ansible.builtin.assert:
+          that:
+            - >-
+              validation_cilium_lb_smoke_test_ip.stdout | trim is
+              match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
+          fail_msg: >-
+            Cilium did not assign an IPv4 address to the smoke-test
+            LoadBalancer Service.
+
+      # This deliberately runs on the Ansible controller. A request originating
+      # on a cluster node could succeed without proving LAN-side L2 advertisement.
+      - name: Curl the Cilium LoadBalancer IP from outside the cluster
+        ansible.builtin.command:
+          argv:
+            - curl
+            - --fail
+            - --silent
+            - --show-error
+            - --noproxy
+            - "*"
+            - --connect-timeout
+            - "3"
+            - "http://{{ validation_cilium_lb_smoke_test_ip.stdout | trim }}:{{ validation_cilium_lb_smoke_test_port }}/hostname"
+        delegate_to: localhost
+        become: false
+        register: validation_cilium_lb_smoke_test_curl
+        changed_when: false
+        retries: "{{ validation_cilium_lb_smoke_test_retries }}"
+        delay: "{{ validation_cilium_lb_smoke_test_delay }}"
+        until:
+          - validation_cilium_lb_smoke_test_curl.rc == 0
+          - validation_cilium_lb_smoke_test_curl.stdout | trim | length > 0
+
+    always:
+      - name: Remove Cilium LoadBalancer smoke-test resources
+        ansible.builtin.command:
+          argv:
+            - kubectl
+            - delete
+            - namespace
+            - "{{ validation_cilium_lb_smoke_test_namespace }}"
+            - --ignore-not-found=true
+            - --wait=false
+        register: validation_cilium_lb_smoke_test_delete
+        changed_when: "'deleted' in validation_cilium_lb_smoke_test_delete.stdout"
+        when: validation_cilium_lb_smoke_test_cleanup | bool
+
   - name: Print nodes
     ansible.builtin.debug:
       var: nodes.stdout_lines
@@ -25,3 +168,12 @@
   - name: Print Cilium status
     ansible.builtin.debug:
       var: cilium_status.stdout_lines
+
+  - name: Print Cilium LoadBalancer smoke-test result
+    ansible.builtin.debug:
+      msg: >-
+        Cilium advertised LoadBalancer IP
+        {{ validation_cilium_lb_smoke_test_ip.stdout | trim }} and it served
+        {{ validation_cilium_lb_smoke_test_curl.stdout | trim }} to the
+        Ansible controller.
+    when: validation_cilium_lb_smoke_test_enabled | bool
