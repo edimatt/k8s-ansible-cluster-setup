@@ -1,5 +1,7 @@
 # Kubernetes Lab Bootstrap
 
+[![Ansible CI](https://github.com/edimatt/k8s-ansible-cluster-setup/actions/workflows/ansible-ci.yml/badge.svg?branch=main)](https://github.com/edimatt/k8s-ansible-cluster-setup/actions/workflows/ansible-ci.yml)
+
 This personal homelab project uses Ansible to configure SSH-ready Ubuntu nodes
 and bootstrap a Kubernetes cluster. The current inventory describes one
 control-plane node and one worker node. The automation prepares the operating
