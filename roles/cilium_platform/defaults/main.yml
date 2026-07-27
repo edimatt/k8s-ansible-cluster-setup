@@ -18,8 +18,8 @@ cilium_operator_replicas: 1
 cilium_lb_pool_name: lan-pool
 cilium_lb_allow_first_last_ips: "No"
 cilium_lb_pool_blocks:
-  - start: 192.168.1.80
-    stop: 192.168.1.89
+  - start: 192.168.124.80
+    stop: 192.168.124.89
 
 cilium_l2_policy_name: lan-l2-announcement
 cilium_l2_interface_regex: "^enp1s0$"
