@@ -1,0 +1,72 @@
+---
+  - name: Validate supported CPU architecture
+    ansible.builtin.assert:
+      that:
+        - kube_bench_arch | length > 0
+        - kube_bench_checksums[kube_bench_arch] is defined
+      fail_msg: "Unsupported kube-bench architecture: {{ ansible_facts['architecture'] }}"
+
+  - name: Check installed kube-bench package version
+    ansible.builtin.command:
+      argv:
+        - dpkg-query
+        - -W
+        - -f=${Version}
+        - kube-bench
+    register: kube_bench_installed_version
+    changed_when: false
+    failed_when: false
+
+  - name: Download kube-bench Debian package
+    ansible.builtin.get_url:
+      url: "{{ kube_bench_release_base_url }}/{{ kube_bench_deb_name }}"
+      dest: "{{ kube_bench_deb_path }}"
+      owner: root
+      group: root
+      mode: '0644'
+      checksum: "sha256:{{ kube_bench_checksums[kube_bench_arch] }}"
+    when:
+      - kube_bench_installed_version.stdout | trim != kube_bench_version
+      - not ansible_check_mode
+
+  - name: Install kube-bench Debian package
+    ansible.builtin.apt:
+      deb: "{{ kube_bench_deb_path }}"
+      state: present
+    when:
+      - kube_bench_installed_version.stdout | trim != kube_bench_version
+      - not ansible_check_mode
+
+  - name: Verify kube-bench binary
+    ansible.builtin.command:
+      argv:
+        - kube-bench
+        - --help
+    register: kube_bench_help_output
+    changed_when: false
+    when: not ansible_check_mode
+
+  - name: Verify kube-bench configuration is installed
+    ansible.builtin.stat:
+      path: "{{ kube_bench_config_path }}"
+    register: kube_bench_config
+    failed_when: not kube_bench_config.stat.exists
+    when: not ansible_check_mode
+
+  - name: Report kube-bench check mode action
+    ansible.builtin.debug:
+      msg: "kube-bench {{ kube_bench_version }} would be installed on {{ inventory_hostname }}"
+    changed_when: true
+    when:
+      - ansible_check_mode
+      - kube_bench_installed_version.stdout | trim != kube_bench_version
+
+  - name: Print kube-bench status
+    ansible.builtin.debug:
+      msg:
+        - "Host: {{ inventory_hostname }}"
+        - "Version: {{ kube_bench_version }}"
+        - "Config: {{ kube_bench_config_path }}"
+    when:
+      - kube_bench_help_output is defined
+      - kube_bench_help_output is not skipped

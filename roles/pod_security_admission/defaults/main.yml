@@ -1,0 +1,8 @@
+---
+kubeconfig_path: /etc/kubernetes/admin.conf
+psa_config_dir: /etc/kubernetes/admission-control
+psa_config_path: "{{ psa_config_dir }}/pod-security-admission.yaml"
+kube_apiserver_manifest_path: /etc/kubernetes/manifests/kube-apiserver.yaml
+kube_apiserver_manifest_pre_psa_backup_path: "{{ kube_apiserver_manifest_path }}.pre-psa.manual"
+psa_pod_security_config_api_version: pod-security.admission.config.k8s.io/v1
+

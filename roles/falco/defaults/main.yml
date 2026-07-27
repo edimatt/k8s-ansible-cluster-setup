@@ -1,0 +1,11 @@
+---
+kubeconfig_path: /etc/kubernetes/admin.conf
+
+falco_namespace: falco
+falco_release_name: falco
+falco_chart_repo_name: falcosecurity
+falco_chart_repo_url: https://falcosecurity.github.io/charts
+falco_chart_ref: falcosecurity/falco
+falco_chart_version: ""
+falco_values_path: /tmp/falco-values.yml
+

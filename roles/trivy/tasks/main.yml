@@ -1,0 +1,106 @@
+---
+  - name: Validate supported operating system family
+    ansible.builtin.assert:
+      that:
+        - ansible_facts['os_family'] == 'Debian'
+      fail_msg: "Trivy APT installation requires a Debian-family host."
+
+  - name: Install Trivy apt prerequisites
+    ansible.builtin.apt:
+      name:
+        - ca-certificates
+        - gnupg
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+
+  - name: Ensure apt keyrings directory exists
+    ansible.builtin.file:
+      path: /usr/share/keyrings
+      state: directory
+      owner: root
+      group: root
+      mode: '0755'
+
+  - name: Download Trivy apt public key
+    ansible.builtin.get_url:
+      url: "{{ trivy_apt_key_url }}"
+      dest: "{{ trivy_apt_key_source_path }}"
+      owner: root
+      group: root
+      mode: '0644'
+    register: trivy_apt_key_download
+    when: not ansible_check_mode
+
+  # Keep the armored key on disk so get_url can detect key rotations.
+  - name: Check Trivy apt keyring
+    ansible.builtin.stat:
+      path: "{{ trivy_apt_keyring }}"
+    register: trivy_apt_keyring_stat
+
+  - name: Dearmor Trivy apt key
+    ansible.builtin.command:
+      argv:
+        - gpg
+        - --dearmor
+        - --yes
+        - -o
+        - "{{ trivy_apt_keyring }}"
+        - "{{ trivy_apt_key_source_path }}"
+    changed_when: true
+    when:
+      - not ansible_check_mode
+      - trivy_apt_key_download.changed or not trivy_apt_keyring_stat.stat.exists
+
+  - name: Configure Trivy apt repository
+    ansible.builtin.copy:
+      dest: "{{ trivy_apt_repo_file }}"
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        deb [signed-by={{ trivy_apt_keyring }}] https://get.trivy.dev/deb generic main
+
+  - name: Check installed Trivy package version
+    ansible.builtin.command:
+      argv:
+        - dpkg-query
+        - -W
+        - -f=${Version}
+        - trivy
+    register: trivy_installed_version
+    changed_when: false
+    failed_when: false
+
+  - name: Install Trivy
+    ansible.builtin.apt:
+      name: trivy
+      state: present
+      update_cache: true
+    when: not ansible_check_mode
+
+  - name: Verify Trivy binary
+    ansible.builtin.command:
+      argv:
+        - trivy
+        - --version
+    register: trivy_version_output
+    changed_when: false
+    when: not ansible_check_mode
+
+  - name: Report Trivy check mode action
+    ansible.builtin.debug:
+      msg: "Trivy would be installed from the Aqua Security APT repository on {{ inventory_hostname }}"
+    changed_when: true
+    when:
+      - ansible_check_mode
+      - trivy_installed_version.rc != 0
+
+  - name: Print Trivy status
+    ansible.builtin.debug:
+      msg:
+        - "Host: {{ inventory_hostname }}"
+        - "{{ trivy_version_output.stdout }}"
+    when:
+      - trivy_version_output is defined
+      - trivy_version_output is not skipped

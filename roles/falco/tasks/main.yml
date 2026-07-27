@@ -1,0 +1,275 @@
+---
+  - name: Create Falco namespace
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - create
+        - namespace
+        - "{{ falco_namespace }}"
+    register: falco_namespace_create
+    changed_when: falco_namespace_create.rc == 0
+    failed_when: >
+      falco_namespace_create.rc != 0 and
+      'AlreadyExists' not in falco_namespace_create.stderr and
+      'AlreadyExists' not in falco_namespace_create.stdout
+    when: not ansible_check_mode
+
+  - name: Add Falco Helm repository
+    ansible.builtin.command:
+      argv:
+        - helm
+        - repo
+        - add
+        - --force-update
+        - "{{ falco_chart_repo_name }}"
+        - "{{ falco_chart_repo_url }}"
+    register: falco_repo_add
+    changed_when: >
+      'has been added' in falco_repo_add.stdout or
+      'has been updated' in falco_repo_add.stdout
+    when: not ansible_check_mode
+
+  - name: Update Helm repositories
+    ansible.builtin.command:
+      argv:
+        - helm
+        - repo
+        - update
+    changed_when: false
+    when: not ansible_check_mode
+
+  - name: Write Falco Helm values
+    ansible.builtin.copy:
+      dest: "{{ falco_values_path }}"
+      owner: root
+      group: root
+      mode: '0600'
+      content: |
+        # tty=true keeps Falco log output visible immediately during lab exercises.
+        tty: true
+
+        controller:
+          kind: daemonset
+
+        driver:
+          enabled: true
+          kind: auto
+
+        falco:
+          priority: info
+          load_plugins:
+            - container
+          libs_logger:
+            enabled: true
+            severity: warning
+          plugins:
+            - name: container
+              library_path: libcontainer.so
+              init_config:
+                label_max_len: 100
+                with_size: false
+                hooks:
+                  - create
+                engines:
+                  bpm:
+                    enabled: false
+                  cri:
+                    enabled: false
+                  docker:
+                    enabled: false
+                  lxc:
+                    enabled: false
+                  libvirt_lxc:
+                    enabled: false
+                  podman:
+                    enabled: false
+                  containerd:
+                    enabled: true
+                    sockets:
+                      - /host/run/containerd/containerd.sock
+
+        falcosidekick:
+          enabled: false
+    when: not ansible_check_mode
+
+  - name: Build Helm install command without chart version
+    ansible.builtin.set_fact:
+      falco_helm_upgrade_argv:
+        - helm
+        - upgrade
+        - --install
+        - "{{ falco_release_name }}"
+        - "{{ falco_chart_ref }}"
+        - --namespace
+        - "{{ falco_namespace }}"
+        - --create-namespace
+        - --values
+        - "{{ falco_values_path }}"
+        - --timeout
+        - 10m
+    when: falco_chart_version | string | trim | length == 0
+
+  - name: Build Helm install command with chart version
+    ansible.builtin.set_fact:
+      falco_helm_upgrade_argv:
+        - helm
+        - upgrade
+        - --install
+        - "{{ falco_release_name }}"
+        - "{{ falco_chart_ref }}"
+        - --namespace
+        - "{{ falco_namespace }}"
+        - --create-namespace
+        - --values
+        - "{{ falco_values_path }}"
+        - --version
+        - "{{ falco_chart_version }}"
+        - --timeout
+        - 10m
+    when: falco_chart_version | string | trim | length > 0
+
+  - name: Install or upgrade Falco with Helm
+    ansible.builtin.command:
+      argv: "{{ falco_helm_upgrade_argv }}"
+    register: falco_helm_install
+    changed_when: >
+      'has been upgraded' in falco_helm_install.stdout or
+      'has been installed' in falco_helm_install.stdout or
+      'Installing it now' in falco_helm_install.stdout
+    when: not ansible_check_mode
+
+  - name: Wait for Falco DaemonSet to roll out
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - -n
+        - "{{ falco_namespace }}"
+        - rollout
+        - status
+        - "daemonset/{{ falco_release_name }}"
+        - "--timeout=300s"
+    register: falco_daemonset_rollout
+    changed_when: false
+    failed_when: false
+    when: not ansible_check_mode
+
+  - name: Show Falco DaemonSet when rollout is not complete
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - -n
+        - "{{ falco_namespace }}"
+        - describe
+        - "daemonset/{{ falco_release_name }}"
+    register: falco_daemonset_describe
+    changed_when: false
+    failed_when: false
+    when:
+      - not ansible_check_mode
+      - falco_daemonset_rollout.rc != 0
+
+  - name: Wait for Falco pods to become ready
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - -n
+        - "{{ falco_namespace }}"
+        - wait
+        - "--for=condition=Ready"
+        - pods
+        - --all
+        - "--timeout=300s"
+    register: falco_pods_ready
+    changed_when: false
+    failed_when: false
+    when: not ansible_check_mode
+
+  - name: Show Helm release
+    ansible.builtin.command:
+      argv:
+        - helm
+        - status
+        - "{{ falco_release_name }}"
+        - -n
+        - "{{ falco_namespace }}"
+    register: falco_helm_status
+    changed_when: false
+    when: not ansible_check_mode
+
+  - name: Show Falco pods
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - -n
+        - "{{ falco_namespace }}"
+        - get
+        - pods
+        - -o
+        - wide
+    register: falco_pods
+    changed_when: false
+    when: not ansible_check_mode
+
+  - name: Show recent Falco logs
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - -n
+        - "{{ falco_namespace }}"
+        - logs
+        - -l
+        - "app.kubernetes.io/instance={{ falco_release_name }},app.kubernetes.io/name=falco"
+        - -c
+        - falco
+        - --tail=80
+        - --prefix=true
+    register: falco_recent_logs
+    changed_when: false
+    failed_when: false
+    when: not ansible_check_mode
+
+  - name: Show previous Falco logs when rollout is not complete
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - -n
+        - "{{ falco_namespace }}"
+        - logs
+        - -l
+        - "app.kubernetes.io/instance={{ falco_release_name }},app.kubernetes.io/name=falco"
+        - -c
+        - falco
+        - --previous
+        - --tail=80
+        - --prefix=true
+    register: falco_previous_logs
+    changed_when: false
+    failed_when: false
+    when:
+      - not ansible_check_mode
+      - falco_daemonset_rollout.rc != 0
+
+  - name: Report Falco check mode action
+    ansible.builtin.debug:
+      msg: "Falco would be installed with Helm as a DaemonSet on {{ inventory_hostname }}"
+    changed_when: true
+    when: ansible_check_mode
+
+  - name: Print Falco status
+    ansible.builtin.debug:
+      msg:
+        - "{{ falco_helm_status.stdout_lines }}"
+        - "{{ falco_pods.stdout_lines }}"
+        - "{{ falco_recent_logs.stdout_lines }}"
+        - "{{ falco_previous_logs.stdout_lines | default([]) }}"
+        - "{{ falco_daemonset_describe.stdout_lines | default([]) }}"
+    when:
+      - falco_helm_status is defined
+      - falco_helm_status is not skipped
+
+  - name: Fail when Falco DaemonSet rollout did not complete
+    ansible.builtin.fail:
+      msg: "Falco DaemonSet rollout did not complete. Review the status output above."
+    when:
+      - not ansible_check_mode
+      - falco_daemonset_rollout.rc != 0

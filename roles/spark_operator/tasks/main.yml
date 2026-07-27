@@ -1,0 +1,275 @@
+---
+  - name: Ensure Spark Operator namespace exists
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - create
+        - namespace
+        - "{{ spark_operator_namespace }}"
+    register: spark_operator_namespace_create
+    changed_when: spark_operator_namespace_create.rc == 0
+    failed_when: >
+      spark_operator_namespace_create.rc != 0 and
+      'AlreadyExists' not in spark_operator_namespace_create.stderr and
+      'AlreadyExists' not in spark_operator_namespace_create.stdout
+
+  - name: Ensure Spark jobs namespace exists
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - create
+        - namespace
+        - "{{ spark_operator_job_namespace }}"
+    register: spark_job_namespace_create
+    changed_when: spark_job_namespace_create.rc == 0
+    failed_when: >
+      spark_job_namespace_create.rc != 0 and
+      'AlreadyExists' not in spark_job_namespace_create.stderr and
+      'AlreadyExists' not in spark_job_namespace_create.stdout
+
+  - name: Write Spark job RBAC manifest
+    ansible.builtin.copy:
+      dest: "{{ spark_operator_rbac_manifest_path }}"
+      owner: root
+      group: root
+      mode: '0600'
+      content: |
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: spark
+          namespace: {{ spark_operator_job_namespace }}
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        metadata:
+          name: spark-role
+          namespace: {{ spark_operator_job_namespace }}
+        rules:
+          - apiGroups: [""]
+            resources:
+              - pods
+              - services
+              - configmaps
+              - persistentvolumeclaims
+            verbs:
+              - create
+              - get
+              - watch
+              - list
+              - delete
+              - deletecollection
+              - patch
+          - apiGroups: [""]
+            resources:
+              - pods/log
+            verbs:
+              - get
+              - list
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata:
+          name: spark-role-binding
+          namespace: {{ spark_operator_job_namespace }}
+        subjects:
+          - kind: ServiceAccount
+            name: spark
+            namespace: {{ spark_operator_job_namespace }}
+        roleRef:
+          kind: Role
+          name: spark-role
+          apiGroup: rbac.authorization.k8s.io
+
+  - name: Apply Spark job RBAC
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - apply
+        - -f
+        - "{{ spark_operator_rbac_manifest_path }}"
+    register: spark_operator_rbac_apply
+    changed_when: >
+      'created' in spark_operator_rbac_apply.stdout or
+      'configured' in spark_operator_rbac_apply.stdout
+
+  - name: Verify Spark job RBAC can delete service collections
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - auth
+        - can-i
+        - deletecollection
+        - services
+        - --as=system:serviceaccount:{{ spark_operator_job_namespace }}:spark
+        - -n
+        - "{{ spark_operator_job_namespace }}"
+    register: spark_operator_rbac_deletecollection_can_i
+    changed_when: false
+    failed_when: spark_operator_rbac_deletecollection_can_i.stdout | trim != 'yes'
+
+  - name: Verify Spark job RBAC permissions
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - auth
+        - can-i
+        - create
+        - pods
+        - --as=system:serviceaccount:{{ spark_operator_job_namespace }}:spark
+        - -n
+        - "{{ spark_operator_job_namespace }}"
+    register: spark_operator_rbac_can_i
+    changed_when: false
+    failed_when: spark_operator_rbac_can_i.stdout | trim != 'yes'
+
+  - name: Add Spark Operator Helm repository
+    ansible.builtin.command: >
+      helm repo add --force-update
+      {{ spark_operator_chart_repo_name }}
+      {{ spark_operator_chart_repo_url }}
+    register: spark_operator_repo_add
+    changed_when: >
+      'has been added' in spark_operator_repo_add.stdout or
+      'has been updated' in spark_operator_repo_add.stdout
+
+  - name: Update Helm repositories
+    ansible.builtin.command: helm repo update
+    changed_when: false
+
+  - name: Write Spark Operator Helm values
+    ansible.builtin.copy:
+      dest: "{{ spark_operator_values_path }}"
+      owner: root
+      group: root
+      mode: '0600'
+      content: |
+        spark:
+          jobNamespaces:
+            - "{{ spark_operator_job_namespace }}"
+
+        webhook:
+          enable: true
+
+  - name: Build Helm install command without chart version
+    ansible.builtin.set_fact:
+      spark_operator_helm_upgrade_argv:
+        - helm
+        - upgrade
+        - --install
+        - "{{ spark_operator_release_name }}"
+        - "{{ spark_operator_chart_ref }}"
+        - --namespace
+        - "{{ spark_operator_namespace }}"
+        - --values
+        - "{{ spark_operator_values_path }}"
+        - --wait
+        - --wait-for-jobs
+        - --timeout
+        - 10m
+    when: spark_operator_chart_version | string | trim | length == 0
+
+  - name: Build Helm install command with chart version
+    ansible.builtin.set_fact:
+      spark_operator_helm_upgrade_argv:
+        - helm
+        - upgrade
+        - --install
+        - "{{ spark_operator_release_name }}"
+        - "{{ spark_operator_chart_ref }}"
+        - --namespace
+        - "{{ spark_operator_namespace }}"
+        - --values
+        - "{{ spark_operator_values_path }}"
+        - --wait
+        - --wait-for-jobs
+        - --timeout
+        - 10m
+        - --version
+        - "{{ spark_operator_chart_version }}"
+    when: spark_operator_chart_version | string | trim | length > 0
+
+  - name: Install or upgrade Spark Operator with Helm
+    ansible.builtin.command:
+      argv: "{{ spark_operator_helm_upgrade_argv }}"
+    register: spark_operator_helm_install
+    changed_when: >
+      'has been upgraded' in spark_operator_helm_install.stdout or
+      'has been installed' in spark_operator_helm_install.stdout or
+      'Installing it now' in spark_operator_helm_install.stdout
+
+  - name: Wait for Spark Operator CRDs to be established
+    ansible.builtin.command: >
+      kubectl wait --for=condition=Established crd/{{ item }} --timeout=180s
+    loop: "{{ spark_operator_crds }}"
+    register: spark_operator_crds_established
+    changed_when: false
+
+  - name: Wait for Spark Operator deployment to become available
+    ansible.builtin.command: >
+      kubectl -n {{ spark_operator_namespace }}
+      wait --for=condition=Available deployment --all --timeout=300s
+    register: spark_operator_deployment_ready
+    changed_when: false
+
+  - name: Smoke-check Helm release
+    ansible.builtin.command: >
+      helm status {{ spark_operator_release_name }} -n {{ spark_operator_namespace }}
+    register: spark_operator_helm_status
+    changed_when: false
+    failed_when: spark_operator_helm_status.rc != 0
+
+  - name: Smoke-check Spark Operator pods
+    ansible.builtin.command: >
+      kubectl -n {{ spark_operator_namespace }}
+      get pods -o custom-columns=NAME:.metadata.name,PHASE:.status.phase --no-headers
+    register: spark_operator_pods
+    changed_when: false
+    failed_when: >
+      spark_operator_pods.rc != 0 or
+      spark_operator_pods.stdout | trim == "" or
+      'Running' not in spark_operator_pods.stdout
+
+  - name: Smoke-check Spark Operator CRDs
+    ansible.builtin.command: >
+      kubectl get crd {{ spark_operator_crds | join(' ') }}
+    register: spark_operator_crds_status
+    changed_when: false
+    failed_when: spark_operator_crds_status.rc != 0
+
+  - name: Smoke-check Spark API resources
+    ansible.builtin.command: >
+      kubectl api-resources --api-group=sparkoperator.k8s.io -o name
+    register: spark_operator_api_resources_status
+    changed_when: false
+    failed_when: >
+      spark_operator_api_resources_status.rc != 0 or
+      'sparkapplications' not in spark_operator_api_resources_status.stdout or
+      'scheduledsparkapplications' not in spark_operator_api_resources_status.stdout
+
+  - name: Print Spark Operator status
+    ansible.builtin.debug:
+      msg:
+        - "{{ spark_operator_helm_status.stdout_lines }}"
+        - "{{ spark_operator_pods.stdout_lines }}"
+        - "{{ spark_operator_crds_status.stdout_lines }}"
+        - "{{ spark_operator_api_resources_status.stdout_lines }}"
+
+  - name: Verify Spark service account can create pods
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - auth
+        - can-i
+        - create
+        - pods
+        - --as=system:serviceaccount:spark:spark
+        - -n
+        - spark
+    register: spark_operator_final_rbac_can_i
+    changed_when: false
+    failed_when: spark_operator_final_rbac_can_i.stdout | trim != 'yes'
+
+  # Future smoke test:
+  # add a tiny SparkPi SparkApplication in the {{ spark_operator_job_namespace }} namespace
+  # once you want to validate end-to-end submission and executor scheduling.

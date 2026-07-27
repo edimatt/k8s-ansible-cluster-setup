@@ -1,0 +1,21 @@
+---
+kubeconfig_path: /etc/kubernetes/admin.conf
+
+cert_manager_version: v1.20.2
+cert_manager_namespace: cert-manager
+cert_manager_release_name: cert-manager
+cert_manager_chart_ref: oci://quay.io/jetstack/charts/cert-manager
+
+cert_manager_crds:
+  - certificates.cert-manager.io
+  - certificaterequests.cert-manager.io
+  - issuers.cert-manager.io
+  - clusterissuers.cert-manager.io
+  - challenges.acme.cert-manager.io
+  - orders.acme.cert-manager.io
+
+cert_manager_deployments:
+  - cert-manager
+  - cert-manager-cainjector
+  - cert-manager-webhook
+

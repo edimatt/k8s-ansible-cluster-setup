@@ -1,0 +1,5 @@
+---
+# Optional components are opt-in. Enable them with, for example:
+# ansible-playbook site.yaml -e enable_monitoring=true
+enable_monitoring: false
+enable_pod_security_admission: false

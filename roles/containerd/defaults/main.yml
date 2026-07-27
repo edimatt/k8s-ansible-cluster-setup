@@ -1,0 +1,23 @@
+---
+cri_tools_version: "v1.35.0"
+cri_tools_arch_map:
+  x86_64: amd64
+  aarch64: arm64
+  arm64: arm64
+cri_tools_arch: "{{ cri_tools_arch_map.get(ansible_facts['architecture'], '') }}"
+cri_tools_install_dir: /usr/local/bin
+cri_tools_archive_name: "crictl-{{ cri_tools_version }}-linux-{{ cri_tools_arch }}.tar.gz"
+cri_tools_archive_path: "/tmp/{{ cri_tools_archive_name }}"
+cri_tools_download_url: "https://github.com/kubernetes-sigs/cri-tools/releases/download/{{ cri_tools_version }}/{{ cri_tools_archive_name }}"
+
+nerdctl_version: "v2.3.4"
+nerdctl_version_number: "{{ nerdctl_version | regex_replace('^v', '') }}"
+nerdctl_arch_map:
+  x86_64: amd64
+  aarch64: arm64
+  arm64: arm64
+nerdctl_arch: "{{ nerdctl_arch_map.get(ansible_facts['architecture'], '') }}"
+nerdctl_install_dir: /usr/local/bin
+nerdctl_archive_name: "nerdctl-{{ nerdctl_version_number }}-linux-{{ nerdctl_arch }}.tar.gz"
+nerdctl_archive_path: "/tmp/{{ nerdctl_archive_name }}"
+nerdctl_download_url: "https://github.com/containerd/nerdctl/releases/download/{{ nerdctl_version }}/{{ nerdctl_archive_name }}"

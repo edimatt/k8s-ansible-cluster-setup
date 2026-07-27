@@ -1,0 +1,4 @@
+---
+cilium_cli_install_dir: /usr/local/bin
+cilium_cli_arch: "{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'amd64' }}"
+

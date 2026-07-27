@@ -1,0 +1,8 @@
+---
+kubeconfig_path: /etc/kubernetes/admin.conf
+metrics_server_namespace: kube-system
+metrics_server_release_name: metrics-server
+metrics_server_repo_name: metrics-server
+metrics_server_repo_url: https://kubernetes-sigs.github.io/metrics-server/
+metrics_server_chart_ref: metrics-server/metrics-server
+

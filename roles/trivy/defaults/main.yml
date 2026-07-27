@@ -1,0 +1,6 @@
+---
+trivy_apt_key_url: https://get.trivy.dev/deb/public.key
+trivy_apt_key_source_path: /usr/share/keyrings/trivy.asc
+trivy_apt_keyring: /usr/share/keyrings/trivy.gpg
+trivy_apt_repo_file: /etc/apt/sources.list.d/trivy.list
+

@@ -1,0 +1,151 @@
+---
+  - name: Create ingress-nginx namespace
+    ansible.builtin.command: >
+      kubectl create namespace {{ nginx_ingress_namespace }}
+    register: nginx_ingress_namespace_create
+    changed_when: "'created' in nginx_ingress_namespace_create.stdout"
+    failed_when:
+      - nginx_ingress_namespace_create.rc != 0
+      - "'AlreadyExists' not in nginx_ingress_namespace_create.stderr"
+
+  - name: Add ingress-nginx Helm repository
+    ansible.builtin.command: >
+      helm repo add {{ nginx_ingress_chart_repo_name }} {{ nginx_ingress_chart_repo_url }}
+    register: nginx_ingress_repo_add
+    changed_when: "'has been added' in nginx_ingress_repo_add.stdout"
+    failed_when:
+      - nginx_ingress_repo_add.rc != 0
+      - "'already exists' not in nginx_ingress_repo_add.stderr"
+
+  - name: Update Helm repositories
+    ansible.builtin.command: helm repo update
+    changed_when: false
+
+  - name: Write ingress-nginx values
+    ansible.builtin.copy:
+      dest: "{{ nginx_ingress_values_path }}"
+      owner: root
+      group: root
+      mode: '0600'
+      content: |
+        controller:
+          # nginx is default because this cluster is currently optimized for CKA labs.
+          # Lab manifests may omit spec.ingressClassName.
+          # Only one IngressClass should be default at a time.
+          ingressClassResource:
+            name: "{{ nginx_ingress_class_name }}"
+            enabled: true
+            default: {{ nginx_ingress_default_class | bool | lower }}
+          ingressClass: "{{ nginx_ingress_class_name }}"
+
+          # In this cluster, LoadBalancer Services are handled by Cilium.
+          # Cilium LB IPAM / L2 or BGP announcement is configured separately.
+          service:
+            type: {{ nginx_ingress_service_type }}
+
+  - name: Check current ingress-nginx Helm release status
+    ansible.builtin.command: >
+      helm status {{ nginx_ingress_release_name }} -n {{ nginx_ingress_namespace }}
+    register: nginx_ingress_helm_status_before
+    changed_when: false
+    failed_when: false
+
+  - name: Remove stale pending ingress-nginx Helm release
+    ansible.builtin.command: >
+      helm uninstall {{ nginx_ingress_release_name }} -n {{ nginx_ingress_namespace }} --wait
+    register: nginx_ingress_pending_release_cleanup
+    changed_when: nginx_ingress_pending_release_cleanup.rc == 0
+    when:
+      - nginx_ingress_helm_status_before.rc == 0
+      - "'STATUS: pending-' in nginx_ingress_helm_status_before.stdout"
+
+  - name: Install or upgrade ingress-nginx with Helm
+    ansible.builtin.command: >
+      helm upgrade --install {{ nginx_ingress_release_name }}
+      {{ nginx_ingress_chart_ref }}
+      --namespace {{ nginx_ingress_namespace }}
+      --version {{ nginx_ingress_chart_version }}
+      --values {{ nginx_ingress_values_path }}
+      --wait
+      --timeout 10m
+    register: nginx_ingress_helm_install
+    retries: 3
+    delay: 15
+    until: nginx_ingress_helm_install.rc == 0
+    changed_when: >
+      'has been upgraded' in nginx_ingress_helm_install.stdout or
+      'has been installed' in nginx_ingress_helm_install.stdout or
+      'Installing it now' in nginx_ingress_helm_install.stdout
+
+  - name: Wait for ingress-nginx controller Deployment
+    ansible.builtin.command: >
+      kubectl -n {{ nginx_ingress_namespace }}
+      rollout status deployment/{{ nginx_ingress_release_name }}-controller --timeout=300s
+    register: nginx_ingress_rollout
+    changed_when: false
+
+  - name: Wait for ingress-nginx IngressClass
+    ansible.builtin.command: kubectl get ingressclass {{ nginx_ingress_class_name }}
+    register: nginx_ingress_class_check
+    changed_when: false
+    retries: 12
+    delay: 5
+    until: nginx_ingress_class_check.rc == 0
+
+  # Different LoadBalancer implementations may publish either an IP or a hostname.
+  # In this cluster, Cilium should normally assign an IP.
+  - name: Wait for ingress-nginx LoadBalancer address
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - -n
+        - "{{ nginx_ingress_namespace }}"
+        - get
+        - service
+        - "{{ nginx_ingress_release_name }}-controller"
+        - -o
+        - "jsonpath={.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}"
+    register: nginx_ingress_loadbalancer_address
+    changed_when: false
+    failed_when: false
+    retries: 24
+    delay: 5
+    until: nginx_ingress_loadbalancer_address.rc == 0 and nginx_ingress_loadbalancer_address.stdout | length > 0
+    when: nginx_ingress_service_type == 'LoadBalancer'
+
+  - name: Require ingress-nginx LoadBalancer address when using LoadBalancer service
+    ansible.builtin.assert:
+      that:
+        - nginx_ingress_loadbalancer_address.stdout | default('') | length > 0
+      fail_msg: >-
+        ingress-nginx is running but its LoadBalancer service has no external address.
+        Configure the cilium_platform role first so LoadBalancer IPAM/L2 is available
+        and set cilium_lb_pool_blocks, or rerun this play with
+        -e nginx_ingress_service_type=NodePort.
+    when: nginx_ingress_service_type == 'LoadBalancer'
+
+  - name: Show Helm release
+    ansible.builtin.command: >
+      helm status {{ nginx_ingress_release_name }} -n {{ nginx_ingress_namespace }}
+    register: nginx_ingress_helm_status
+    changed_when: false
+
+  - name: Show ingress-nginx pods
+    ansible.builtin.command: >
+      kubectl -n {{ nginx_ingress_namespace }} get pods -o wide
+    register: nginx_ingress_pods
+    changed_when: false
+
+  - name: Show ingress-nginx services
+    ansible.builtin.command: >
+      kubectl -n {{ nginx_ingress_namespace }} get svc -o wide
+    register: nginx_ingress_services
+    changed_when: false
+
+  - name: Print ingress-nginx status
+    ansible.builtin.debug:
+      msg:
+        - "{{ nginx_ingress_helm_status.stdout_lines }}"
+        - "{{ nginx_ingress_pods.stdout_lines }}"
+        - "{{ nginx_ingress_services.stdout_lines }}"
+        - "ingress-nginx LoadBalancer address: {{ nginx_ingress_loadbalancer_address.stdout }}"
