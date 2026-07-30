@@ -109,11 +109,11 @@ For a new cluster, target the control plane first and then the workers:
 ./bootstrap.sh --limit k8s_control_plane
 ```
 
-Use `--limit` with any inventory host or group. Arguments after `--` are passed
-unchanged to `ansible-playbook`:
+Use `--limit` with any inventory host or group. Arguments are passed unchanged
+to `ansible-playbook`:
 
 ```bash
-./bootstrap.sh -- --tags cilium
+./bootstrap.sh --tags cilium
 ```
 
 The numbered playbooks were intentionally removed. There is one orchestration
@@ -297,12 +297,13 @@ The play order and host targeting are defined in `site.yaml`.
 
 ### CI and quality gates
 
-- Add repository checks for YAML and Ansible syntax, linting, and shell
-  scripts.
+- Extend linting coverage to all roles and supporting YAML files.
 - Add a test or disposable-lab gate for the validation contract.
 
-There is currently no CI workflow in this repository, so these are roadmap
-items rather than existing checks.
+The existing Ansible CI workflow checks top-level YAML, Ansible syntax and
+inventory parsing, runs Ansible lint on the orchestration playbooks, and checks
+the shell scripts with ShellCheck. A safe Ubuntu preflight smoke test is also
+available through manual workflow dispatch.
 
 ## Related repository
 

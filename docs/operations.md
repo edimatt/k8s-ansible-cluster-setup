@@ -44,8 +44,8 @@ ansible-playbook site.yaml --skip-tags optional
 
 `--limit` can select any inventory host or group. `k8s_cluster` selects both
 the control plane and workers. `bootstrap.sh` handles its own convenience
-options only through the shell environment and forwards the remaining
-arguments; everything after `--` is passed unchanged.
+options only through the shell environment and forwards all command-line
+arguments directly to `ansible-playbook`.
 
 ## Helm retries and cleanup
 
