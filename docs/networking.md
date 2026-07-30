@@ -5,7 +5,7 @@
 The Cilium role enables kube-proxy replacement, L2 announcements, Gateway API,
 and Hubble Relay. It creates a Cilium LoadBalancer IP pool named `lan-pool`.
 The convenience wrapper supplies the author's lab default pool:
-`192.168.124.80`–`192.168.124.89`.
+`192.168.125.80`–`192.168.125.89`.
 
 Override the pool with:
 

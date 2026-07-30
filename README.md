@@ -22,9 +22,9 @@ production-ready cluster or as a generic reusable Ansible collection.
 ## Architecture
 
 [k8s-terraform-cluster-setup](https://github.com/edimatt/k8s-terraform-cluster-setup)
-is the external producer of the nodes. This repository starts after those
-nodes have completed first boot and are
-reachable over SSH.
+is the external producer of the nodes and the Ansible inventory that describes
+them. This repository starts after those nodes have completed first boot and
+are reachable over SSH.
 
 ```text
 k8s-terraform-cluster-setup
@@ -69,10 +69,11 @@ produces the nodes:
 - cloud-init first boot
 - stable node identity
 - SSH-ready infrastructure
+- Ansible inventory generation from the provisioned node definitions
 
 This repository owns the cluster configuration after SSH is available:
 
-- Ansible inventory
+- consumption of the Terraform-generated Ansible inventory
 - node operating-system configuration
 - container runtime
 - Kubernetes packages
@@ -86,8 +87,16 @@ Ansible does not create or destroy the libvirt VMs.
 
 ## Quick start
 
-Run commands from the repository root. The inventory is configured by
-`ansible.cfg` and defaults to `inventory/hosts.ini`.
+Generate the inventory from the Terraform repository after provisioning and
+write it to `inventory/hosts.ini` in this repository:
+
+```bash
+terraform -chdir=../k8s-terraform-cluster-setup output -raw ansible_inventory \
+  > inventory/hosts.ini
+```
+
+Then run commands from this repository root. The inventory path is configured
+by `ansible.cfg` and defaults to `inventory/hosts.ini`.
 
 The canonical orchestration entry point is `site.yaml`. `bootstrap.sh` is a
 convenience wrapper around that same playbook. It supplies
@@ -124,31 +133,35 @@ operational guidance is in [docs/operations.md](docs/operations.md).
 
 ## Inventory
 
-The current lab inventory is:
+Terraform generates the inventory consumed by this project from its node
+definitions and reserved addresses. The current lab inventory is:
 
 ```ini
 [k8s_control_plane]
-k8s-control-01
+k8s-control-01 ansible_host=192.168.125.10 ansible_port=22
 
 [k8s_workers]
-k8s-worker-01
+k8s-worker-01 ansible_host=192.168.125.11 ansible_port=22
 
 [k8s_cluster:children]
 k8s_control_plane
 k8s_workers
+
+[all:vars]
+ansible_user=edoardo
+ansible_python_interpreter=/usr/bin/python3
 ```
 
-Add workers under `k8s_workers`. The first host in `k8s_control_plane` is used
-as the control-plane host for generating the worker join command.
-
-The inventory is static and contains the author's current lab hostnames. They
-are defaults for this repository, not portable names supplied by Terraform.
+Add or change nodes in the Terraform repository, apply the infrastructure
+changes, and regenerate `inventory/hosts.ini`. Do not maintain a separate node
+list here. The first host in `k8s_control_plane` is used as the control-plane
+host for generating the worker join command.
 
 ## Main configuration
 
 Non-secret defaults are intentionally lab-specific:
 
-- Cilium LoadBalancer pool: `192.168.124.80` through `192.168.124.89`
+- Cilium LoadBalancer pool: `192.168.125.80` through `192.168.125.89`
 - Cilium L2 announcement interface: `enp1s0` via `cilium_l2_interface_regex: "^enp1s0$"`
 - kubeadm pod network CIDR: `10.244.0.0/16`
 - control-plane user for the kubeconfig: `edoardo`
@@ -231,8 +244,8 @@ automated acceptance test.
 
 ## Known limitations
 
-- The inventory is static and currently describes one control-plane node and
-  one worker.
+- The Terraform-generated inventory currently describes one control-plane
+  node and one worker.
 - The cluster has a single control-plane node; control-plane high availability
   is not implemented.
 - Cilium's address pool and interface selection assume the author's LAN unless
@@ -260,7 +273,7 @@ bootstrap.sh              convenience wrapper and Cilium pool override
 reset-cluster.yml         reset playbook
 reset-cluster.sh          reset convenience wrapper
 ansible.cfg               inventory and Ansible defaults
-inventory/hosts.ini       static lab inventory
+inventory/hosts.ini       Terraform-generated lab inventory
 group_vars/all.yml        optional component defaults
 roles/                    node, cluster, platform, security, and validation roles
 docs/                     focused operational, networking, and security notes
@@ -308,5 +321,5 @@ available through manual workflow dispatch.
 ## Related repository
 
 [`k8s-terraform-cluster-setup`](https://github.com/edimatt/k8s-terraform-cluster-setup)
-owns the libvirt VM lifecycle and produces the SSH-ready Ubuntu nodes consumed
-here.
+owns the libvirt VM lifecycle and produces both the SSH-ready Ubuntu nodes and
+the Ansible inventory consumed here.
