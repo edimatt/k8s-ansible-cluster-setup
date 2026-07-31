@@ -98,13 +98,21 @@ terraform -chdir=../k8s-terraform-cluster-setup output -raw ansible_inventory \
 Then run commands from this repository root. The inventory path is configured
 by `ansible.cfg` and defaults to `inventory/hosts.ini`.
 
-The canonical orchestration entry point is `site.yaml`. `bootstrap.sh` is a
-convenience wrapper around that same playbook. It supplies
-the lab's default Cilium LoadBalancer pool and forwards its arguments to
-`ansible-playbook`; `site.yaml` remains the source of truth for orchestration.
+Run `just` or `just help` to see the ordered workflow. It runs the high-level
+`bootstrap`, `platform`, and `security` tags separately and lists the optional
+components. The `bootstrap` phase prepares the hosts and installs Kubernetes
+packages. The `platform` phase initializes the control plane, joins workers,
+and installs networking, storage, ingress, and other platform services. The
+`optional` phase installs Spark; pass `-e enable_monitoring=true` with it to
+install monitoring too.
+
+The canonical orchestration entry point is `site.yaml`. The `Justfile`
+provides the project workflow, supplies the lab's default Cilium LoadBalancer
+pool, and forwards bootstrap arguments to `ansible-playbook`; `site.yaml`
+remains the source of truth for orchestration.
 
 ```bash
-./bootstrap.sh
+just bootstrap
 ```
 
 On the first run, `sudo_nopass` may prompt for the SSH user's sudo password,
@@ -115,14 +123,14 @@ in check mode.
 For a new cluster, target the control plane first and then the workers:
 
 ```bash
-./bootstrap.sh --limit k8s_control_plane
+just bootstrap -- --limit k8s_control_plane
 ```
 
 Use `--limit` with any inventory host or group. Arguments are passed unchanged
 to `ansible-playbook`:
 
 ```bash
-./bootstrap.sh --tags cilium
+just bootstrap -- --tags cilium
 ```
 
 The numbered playbooks were intentionally removed. There is one orchestration
@@ -171,12 +179,12 @@ Non-secret defaults are intentionally lab-specific:
 - monitoring: disabled by default
 - Pod Security Admission: disabled by default
 
-The Cilium pool is passed by `bootstrap.sh` from
+The Cilium pool is passed by the `bootstrap` recipe from
 `CILIUM_LB_POOL_BLOCKS`, or can be supplied directly as an extra variable:
 
 ```bash
 CILIUM_LB_POOL_BLOCKS='[{"start":"192.168.1.100","stop":"192.168.1.109"}]' \
-  ./bootstrap.sh
+  just bootstrap
 ```
 
 The pool must be reachable on the node LAN. Override the interface selection
@@ -269,9 +277,8 @@ automated acceptance test.
 
 ```text
 site.yaml                 canonical orchestration entry point
-bootstrap.sh              convenience wrapper and Cilium pool override
+Justfile                  bootstrap, reset, lint, and syntax-check workflow
 reset-cluster.yml         reset playbook
-reset-cluster.sh          reset convenience wrapper
 ansible.cfg               inventory and Ansible defaults
 inventory/hosts.ini       Terraform-generated lab inventory
 group_vars/all.yml        optional component defaults
@@ -313,10 +320,10 @@ The play order and host targeting are defined in `site.yaml`.
 - Extend linting coverage to all roles and supporting YAML files.
 - Add a test or disposable-lab gate for the validation contract.
 
-The existing Ansible CI workflow checks top-level YAML, Ansible syntax and
-inventory parsing, runs Ansible lint on the orchestration playbooks, and checks
-the shell scripts with ShellCheck. A safe Ubuntu preflight smoke test is also
-available through manual workflow dispatch.
+The existing Ansible CI workflow checks the `Justfile`, top-level YAML, Ansible
+syntax and inventory parsing, and runs Ansible lint on the orchestration
+playbooks. A safe Ubuntu preflight smoke test is also available through manual
+workflow dispatch.
 
 ## Related repository
 

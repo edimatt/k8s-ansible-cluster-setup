@@ -2,25 +2,33 @@
 
 These commands operate the lab cluster configured by `site.yaml`.
 
+Run `just` or `just help` for the minimal project workflow. Arguments after
+`--` are forwarded to `ansible-playbook`; use Ansible's plural `--tags` option
+to run the `bootstrap`, `platform`, or `security` phase. `bootstrap` only
+prepares the hosts and installs Kubernetes packages. `platform` initializes
+the control plane, joins workers, and installs the platform services. The
+`optional` phase installs Spark by default; monitoring in that phase only runs
+when `enable_monitoring=true` is passed as an extra variable.
+
 ## Reset and re-bootstrap
 
-`reset-cluster.sh` is destructive to cluster state on the selected hosts. It
+`just reset` is destructive to cluster state on the selected hosts. It
 removes kubeadm state, Kubernetes and CNI paths, the user kubeconfig,
 containerd runtime state, Cilium links, and local-path data. It does not manage
 the underlying libvirt VMs.
 
 ```bash
-./reset-cluster.sh
-./bootstrap.sh
+just reset
+just bootstrap
 ```
 
-Use `--yes` for a non-interactive reset, `-K` or `--ask-become-pass` when sudo
-requires a password, and pass Ansible arguments after `--`:
+Use `reset-force` for a non-interactive reset. Pass Ansible arguments after
+`--`, including `-K` or `--ask-become-pass` when sudo requires a password:
 
 ```bash
-./reset-cluster.sh --yes
-./reset-cluster.sh -K
-./reset-cluster.sh -- --limit k8s-control-01
+just reset-force
+just reset -- -K
+just reset -- --limit k8s-control-01
 ```
 
 The reset playbook has a fixed `kube_user` default of `edoardo` for removing
@@ -34,18 +42,18 @@ initial setup uses raw commands and a password prompt.
 
 ```bash
 ansible-playbook site.yaml --syntax-check
-./bootstrap.sh --check
-./bootstrap.sh --limit k8s_control_plane
-./bootstrap.sh --limit k8s-worker-01
+just bootstrap -- --check
+just bootstrap -- --limit k8s_control_plane
+just bootstrap -- --limit k8s-worker-01
 ansible-playbook site.yaml --tags cilium
 ansible-playbook site.yaml --tags security
 ansible-playbook site.yaml --skip-tags optional
 ```
 
 `--limit` can select any inventory host or group. `k8s_cluster` selects both
-the control plane and workers. `bootstrap.sh` handles its own convenience
-options only through the shell environment and forwards all command-line
-arguments directly to `ansible-playbook`.
+the control plane and workers. The `bootstrap` recipe handles its convenience
+option through the shell environment and forwards all arguments after `--`
+directly to `ansible-playbook`.
 
 ## Helm retries and cleanup
 
@@ -63,7 +71,8 @@ ansible-playbook site.yaml --tags monitoring -e enable_monitoring=true
 ## Common commands
 
 ```bash
-ansible-playbook site.yaml --syntax-check
+just
+just check
 ansible k8s_cluster -b -a "kube-bench run"
 sudo KUBECONFIG=/etc/kubernetes/admin.conf trivy k8s cluster --report summary
 kubectl get nodes -o wide

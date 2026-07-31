@@ -7,95 +7,103 @@
 
 - name: Bootstrap Kubernetes nodes
   hosts: k8s_cluster
+  tags: [bootstrap]
   roles:
     - role: sudo_nopass
       become: false
-      tags: [bootstrap, sudo]
+      tags: [sudo]
     - role: preflight
-      tags: [bootstrap, preflight]
+      tags: [preflight]
     - role: os_prep
-      tags: [bootstrap, os_prep]
+      tags: [os_prep]
     - role: firewall
-      tags: [bootstrap, firewall]
+      tags: [firewall]
     - role: containerd
-      tags: [bootstrap, containerd]
+      tags: [containerd]
     - role: kubernetes_packages
-      tags: [bootstrap, kubernetes]
+      tags: [kubernetes]
 
 - name: Initialize Kubernetes control plane
   hosts: k8s_control_plane
+  tags: [platform]
   roles:
     - role: kubeadm_control_plane
-      tags: [bootstrap, kubeadm, control_plane]
+      tags: [kubeadm, control_plane]
 
 - name: Join Kubernetes workers
   hosts: k8s_workers
+  tags: [platform]
   roles:
     - role: kubeadm_worker
-      tags: [bootstrap, kubeadm, workers]
+      tags: [kubeadm, workers]
 
 - name: Configure the Kubernetes platform
   hosts: k8s_control_plane
+  tags: [platform]
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
     NO_COLOR: "1"
   roles:
     - role: single_node
-      tags: [platform, single_node]
+      tags: [single_node]
     - role: helm
-      tags: [platform, helm]
+      tags: [helm]
     - role: cilium_cli
-      tags: [platform, cilium]
+      tags: [cilium]
     - role: cilium_platform
-      tags: [platform, cilium]
+      tags: [cilium]
     - role: local_storage
-      tags: [platform, storage]
+      tags: [storage]
     - role: metrics_server
-      tags: [platform, metrics]
+      tags: [metrics]
     - role: validation
-      tags: [platform, validation]
+      tags: [validation]
     - role: cert_manager
-      tags: [platform, cert_manager]
+      tags: [cert_manager]
     - role: nginx_ingress
-      tags: [platform, ingress]
+      tags: [ingress]
 
 - name: Install node security tooling
   hosts: k8s_cluster
+  tags: [security]
   roles:
     - role: kube_bench
-      tags: [security, kube_bench]
+      tags: [kube_bench]
     - role: trivy
-      tags: [security, trivy]
+      tags: [trivy]
 
 - name: Install control-plane security controls
   hosts: k8s_control_plane
+  tags: [security]
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
     NO_COLOR: "1"
   roles:
     - role: pod_security_admission
       when: enable_pod_security_admission | bool
-      tags: [security, psa]
+      tags: [psa]
     - role: kyverno
-      tags: [security, kyverno]
+      tags: [kyverno]
     - role: falco
-      tags: [security, falco]
+      tags: [falco]
 
 - name: Install optional platform operators
   hosts: k8s_control_plane
+  tags: [optional]
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
     NO_COLOR: "1"
   roles:
     - role: spark_operator
-      tags: [optional, spark]
+      tags: [spark]
 
 - name: Install optional monitoring
   hosts: k8s_control_plane
+  tags: [optional]
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
     NO_COLOR: "1"
   roles:
     - role: monitoring
       when: enable_monitoring | bool
-      tags: [optional, monitoring]
+      tags: [monitoring]

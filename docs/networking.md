@@ -4,14 +4,14 @@
 
 The Cilium role enables kube-proxy replacement, L2 announcements, Gateway API,
 and Hubble Relay. It creates a Cilium LoadBalancer IP pool named `lan-pool`.
-The convenience wrapper supplies the author's lab default pool:
+The `bootstrap` recipe supplies the author's lab default pool:
 `192.168.125.80`–`192.168.125.89`.
 
 Override the pool with:
 
 ```bash
 CILIUM_LB_POOL_BLOCKS='[{"start":"192.168.1.100","stop":"192.168.1.109"}]' \
-  ./bootstrap.sh
+  just bootstrap
 ```
 
 The addresses must be available and reachable on the node LAN. The same value
